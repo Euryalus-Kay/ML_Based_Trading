@@ -69,11 +69,14 @@ def cmd_align(start, end, bar, session, out):
 @click.option("--universe", default=None)
 @click.option("--out", default="data/dataset.parquet")
 @click.option("--horizons", default="1,3,6,12")
-def cmd_build_dataset(start, end, bar, session, universe, out, horizons):
+@click.option("--only-source", multiple=True,
+                help="Restrict aligned frame to given sources (repeatable)")
+def cmd_build_dataset(start, end, bar, session, universe, out, horizons, only_source):
     """Build per-symbol feature+target dataset for ML training."""
     h = tuple(int(x) for x in horizons.split(","))
     df = build_dataset(start, end, bar=bar, session=session,
-                       universe_path=universe, horizons=h, out_path=out)
+                       universe_path=universe, horizons=h, out_path=out,
+                       only_sources=list(only_source) if only_source else None)
     print(f"dataset: {df.shape[0]} rows x {df.shape[1]} cols -> {out}")
 
 

@@ -52,7 +52,8 @@ def build_dataset(start, end, *,
                    universe_path: Optional[str] = None,
                    horizons=(1, 3, 6, 12),
                    out_path: Optional[str] = None,
-                   storage: Optional[Storage] = None) -> pd.DataFrame:
+                   storage: Optional[Storage] = None,
+                   only_sources: Optional[list[str]] = None) -> pd.DataFrame:
     storage = storage or Storage()
     universe = load_universe(universe_path)
     target_symbols: list[str] = []
@@ -60,7 +61,8 @@ def build_dataset(start, end, *,
         target_symbols.extend(group)
     target_symbols = sorted(set(target_symbols))
 
-    wide = build_aligned_frame(start, end, bar=bar, session=session, storage=storage)
+    wide = build_aligned_frame(start, end, bar=bar, session=session,
+                                 storage=storage, only_sources=only_sources)
     if wide.empty:
         log.warning("aligned frame is empty; collect data first")
         return pd.DataFrame()
