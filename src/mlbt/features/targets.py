@@ -15,6 +15,31 @@ import numpy as np
 import pandas as pd
 
 
+def add_residualised_targets(df: pd.DataFrame, market_df: pd.DataFrame,
+                              horizons=(1, 3, 6, 12),
+                              market_col_candidates=("close_^GSPC", "close_SPY", "close_^NDX")) -> pd.DataFrame:
+    """Add residualised targets: y_resid_logret_h = symbol_logret - mkt_logret.
+
+    Removes the dominant common market factor. A model trained on this
+    learns relative alpha rather than re-discovering "stocks usually go up".
+    """
+    out = df.copy()
+    if market_df is None or market_df.empty or "close" not in out:
+        return out
+    mkt_col = next((c for c in market_col_candidates if c in market_df.columns), None)
+    if mkt_col is None:
+        return out
+    mkt = market_df[mkt_col].astype(float).reindex(out.index, method="ffill")
+    c = out["close"].astype(float)
+    for h in horizons:
+        sym_fwd = np.log(c.shift(-h) / c)
+        mkt_fwd = np.log(mkt.shift(-h) / mkt)
+        resid = sym_fwd - mkt_fwd
+        out[f"y_resid_logret_{h}"] = resid
+        out[f"y_resid_up_{h}"] = (resid > 0).astype("float64").mask(resid.isna())
+    return out
+
+
 def add_targets(df: pd.DataFrame, horizons=(1, 3, 6, 12),
                 up_threshold: float = 0.0,
                 vol_window: int = 60,

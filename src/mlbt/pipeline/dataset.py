@@ -26,7 +26,9 @@ from mlbt.features import (
     add_cross_asset_features,
     add_microstructure_features,
     add_targets,
+    add_time_of_day_features,
 )
+from mlbt.features.targets import add_residualised_targets  # noqa: F401  (defined below)
 from mlbt.pipeline.align import build_aligned_frame
 from mlbt.pipeline.collect import load_universe
 
@@ -76,8 +78,10 @@ def build_dataset(start, end, *,
         log.info("featurising %s (%d bars)", sym, len(bars))
         bars = add_technical_features(bars)
         bars = add_microstructure_features(bars)
+        bars = add_time_of_day_features(bars)
         bars = add_cross_asset_features(bars, market_df, sym)
         bars = add_targets(bars, horizons=horizons)
+        bars = add_residualised_targets(bars, market_df, horizons=horizons)
         bars["symbol"] = sym
         # join scalar/index features (FRED, calendar, sentiment) that aren't symbol-specific
         scalar_cols = [c for c in wide.columns if not any(

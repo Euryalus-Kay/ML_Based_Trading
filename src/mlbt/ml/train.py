@@ -33,7 +33,8 @@ log = get_logger("train")
 
 # ----- Feature / target selection helpers ----------------------------------
 def _select_features(df: pd.DataFrame, target_col: str,
-                     drop_prefixes: Sequence[str] = ("y_logret_", "y_up_", "y_tb_"),
+                     drop_prefixes: Sequence[str] = ("y_logret_", "y_up_", "y_tb_",
+                                                       "y_resid_logret_", "y_resid_up_"),
                      exclude: Sequence[str] = ("symbol",)) -> list[str]:
     features = []
     for c in df.columns:
