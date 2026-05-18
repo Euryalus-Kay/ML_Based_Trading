@@ -47,22 +47,40 @@ def _select_features(df: pd.DataFrame, target_col: str,
     return features
 
 
-def _walk_forward_indices(n: int, n_folds: int = 5, val_frac: float = 0.1):
+def _add_symbol_onehot(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """One-hot encode the 'symbol' column. Returns (new_df, added_cols).
+
+    Lets a single global model learn symbol-specific intercepts and feature
+    interactions through the tree splits.
+    """
+    if "symbol" not in df.columns:
+        return df, []
+    dummies = pd.get_dummies(df["symbol"], prefix="sym").astype("float32")
+    new_cols = list(dummies.columns)
+    df = pd.concat([df, dummies], axis=1)
+    return df, new_cols
+
+
+def _walk_forward_indices(n: int, n_folds: int = 5, val_frac: float = 0.1,
+                           embargo: int = 0):
     """Yield (train_idx, val_idx, test_idx) for n_folds expanding-window splits.
 
-    For fold k: train on [0, t_k), val on [t_k, t_k + v), test on [t_k + v, t_{k+1}).
+    For fold k: train on [0, t_k - embargo), val on [t_k, t_k + v),
+                test on [t_k + v + embargo, t_{k+1}).
     """
     fold_size = n // (n_folds + 1)
     val_size = max(1, int(fold_size * val_frac))
     for k in range(1, n_folds + 1):
         train_end = k * fold_size
         val_end = train_end + val_size
-        test_end = min(n, val_end + fold_size)
-        if test_end <= val_end:
+        test_start = val_end + embargo
+        test_end = min(n, test_start + fold_size)
+        if test_end <= test_start:
             continue
-        yield (np.arange(0, train_end),
+        train_clean_end = max(0, train_end - embargo)
+        yield (np.arange(0, train_clean_end),
                np.arange(train_end, val_end),
-               np.arange(val_end, test_end))
+               np.arange(test_start, test_end))
 
 
 # ----- Metrics --------------------------------------------------------------
@@ -89,7 +107,23 @@ def _binary_metrics(y_true: np.ndarray, y_score: np.ndarray) -> dict:
 
 
 # ----- GBM (LightGBM preferred) --------------------------------------------
-def _train_gbm(df: pd.DataFrame, target: str, feature_cols: list[str], out_dir: Path) -> dict:
+_DEFAULT_LGB = {
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "learning_rate": 0.03,
+    "num_leaves": 127,
+    "min_data_in_leaf": 200,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 5,
+    "lambda_l2": 1.0,
+    "verbosity": -1,
+}
+
+
+def _train_gbm(df: pd.DataFrame, target: str, feature_cols: list[str], out_dir: Path,
+                n_seeds: int = 1, embargo: int = 0,
+                params_override: dict | None = None) -> dict:
     use_lgb = True
     try:
         import lightgbm as lgb
@@ -98,45 +132,49 @@ def _train_gbm(df: pd.DataFrame, target: str, feature_cols: list[str], out_dir: 
         from sklearn.ensemble import GradientBoostingClassifier
 
     df = df.sort_index()
-    df = df.dropna(subset=[target] + feature_cols)
-    if df.empty:
-        return {"error": "no rows after dropna"}
+    # Drop target NaN only; LightGBM handles feature NaN natively.
+    df = df.dropna(subset=[target])
+    # Drop all-NaN feature columns so they don't waste tree splits.
+    nan_share = df[feature_cols].isna().mean()
+    feature_cols = [c for c in feature_cols if nan_share.get(c, 1.0) < 0.95]
+    if df.empty or not feature_cols:
+        return {"error": "no usable rows/features after dropna"}
 
-    X = df[feature_cols].values
+    X = df[feature_cols].values.astype(np.float32)
     y = df[target].astype(int).values
     symbols = df["symbol"].values if "symbol" in df.columns else None
+    log.info("usable: %d rows x %d features (after NaN filter)",
+             len(df), len(feature_cols))
+
+    base_params = dict(_DEFAULT_LGB)
+    if params_override:
+        base_params.update(params_override)
 
     fold_metrics = []
     test_preds_all = []
     fold_id = 0
-    for tr_idx, va_idx, te_idx in _walk_forward_indices(len(df), n_folds=5):
+    for tr_idx, va_idx, te_idx in _walk_forward_indices(len(df), n_folds=5, embargo=embargo):
         fold_id += 1
         Xtr, ytr = X[tr_idx], y[tr_idx]
         Xva, yva = X[va_idx], y[va_idx]
         Xte, yte = X[te_idx], y[te_idx]
 
         if use_lgb:
-            train_ds = lgb.Dataset(Xtr, ytr)
-            val_ds = lgb.Dataset(Xva, yva, reference=train_ds)
-            params = {
-                "objective": "binary",
-                "metric": "binary_logloss",
-                "learning_rate": 0.03,
-                "num_leaves": 127,
-                "min_data_in_leaf": 200,
-                "feature_fraction": 0.8,
-                "bagging_fraction": 0.8,
-                "bagging_freq": 5,
-                "lambda_l2": 1.0,
-                "verbosity": -1,
-            }
-            booster = lgb.train(
-                params, train_ds,
-                num_boost_round=2000,
-                valid_sets=[val_ds],
-                callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
-            )
-            score = booster.predict(Xte)
+            scores = np.zeros(len(Xte), dtype=float)
+            for seed in range(n_seeds):
+                params = dict(base_params, seed=seed, bagging_seed=seed,
+                              feature_fraction_seed=seed)
+                train_ds = lgb.Dataset(Xtr, ytr)
+                val_ds = lgb.Dataset(Xva, yva, reference=train_ds)
+                booster = lgb.train(
+                    params, train_ds,
+                    num_boost_round=2000,
+                    valid_sets=[val_ds],
+                    callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
+                )
+                scores += booster.predict(Xte)
+            scores /= n_seeds
+            score = scores
         else:
             clf = GradientBoostingClassifier(n_estimators=300, max_depth=4,
                                               learning_rate=0.05, subsample=0.8)
@@ -147,7 +185,8 @@ def _train_gbm(df: pd.DataFrame, target: str, feature_cols: list[str], out_dir: 
         m = _binary_metrics(yte, score)
         m["fold"] = fold_id
         fold_metrics.append(m)
-        log.info("fold %d: acc=%.3f auc=%.3f n=%d", fold_id, m["accuracy"], m["auc"], m["n"])
+        log.info("fold %d: acc=%.3f auc=%.3f n=%d (seeds=%d)",
+                 fold_id, m["accuracy"], m["auc"], m["n"], n_seeds)
 
         rec = {"fold": fold_id, "y_true": yte, "y_score": score}
         if symbols is not None:
@@ -322,17 +361,25 @@ def _train_lstm(df: pd.DataFrame, target: str, feature_cols: list[str],
 # ----- Public entrypoint ---------------------------------------------------
 def train_model(dataset_path: str, target: str = "y_up_3",
                  model: str = "gbm", out_dir: str = "data/model",
-                 window: int = 64, epochs: int = 8) -> dict:
+                 window: int = 64, epochs: int = 8,
+                 n_seeds: int = 1, embargo: int = 0,
+                 params_override: dict | None = None,
+                 symbol_onehot: bool = False) -> dict:
     df = pd.read_parquet(dataset_path)
     if target not in df.columns:
         raise KeyError(f"target {target} not in dataset; have y_* cols: "
                        f"{[c for c in df.columns if c.startswith('y_')]}")
     feature_cols = _select_features(df, target_col=target)
+    if symbol_onehot:
+        df, sym_cols = _add_symbol_onehot(df)
+        feature_cols = feature_cols + sym_cols
     out_p = Path(out_dir)
-    log.info("training %s on %d rows x %d features -> %s", model,
-             len(df), len(feature_cols), target)
+    log.info("training %s on %d rows x %d features -> %s (seeds=%d embargo=%d onehot=%s)",
+             model, len(df), len(feature_cols), target, n_seeds, embargo, symbol_onehot)
     if model == "gbm":
-        return _train_gbm(df, target, feature_cols, out_p)
+        return _train_gbm(df, target, feature_cols, out_p,
+                            n_seeds=n_seeds, embargo=embargo,
+                            params_override=params_override)
     if model in ("lstm", "transformer", "patchtst"):
         return _train_lstm(df, target, feature_cols, out_p, window=window,
                             epochs=epochs, model_kind=model)
