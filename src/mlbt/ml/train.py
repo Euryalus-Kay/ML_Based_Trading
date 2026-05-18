@@ -34,7 +34,8 @@ log = get_logger("train")
 # ----- Feature / target selection helpers ----------------------------------
 def _select_features(df: pd.DataFrame, target_col: str,
                      drop_prefixes: Sequence[str] = ("y_logret_", "y_up_", "y_tb_",
-                                                       "y_resid_logret_", "y_resid_up_"),
+                                                       "y_resid_logret_", "y_resid_up_",
+                                                       "y_vol_up_", "y_xsec_top_"),
                      exclude: Sequence[str] = ("symbol",)) -> list[str]:
     features = []
     for c in df.columns:
@@ -122,9 +123,18 @@ _DEFAULT_LGB = {
 }
 
 
+def _horizon_from_target(target: str) -> int:
+    """Parse the horizon h from a target column name (e.g. y_up_5 -> 5)."""
+    try:
+        return int(target.rsplit("_", 1)[-1])
+    except Exception:
+        return 1
+
+
 def _train_gbm(df: pd.DataFrame, target: str, feature_cols: list[str], out_dir: Path,
                 n_seeds: int = 1, embargo: int = 0,
-                params_override: dict | None = None) -> dict:
+                params_override: dict | None = None,
+                use_overlap_weights: bool = True) -> dict:
     use_lgb = True
     try:
         import lightgbm as lgb
@@ -144,8 +154,19 @@ def _train_gbm(df: pd.DataFrame, target: str, feature_cols: list[str], out_dir: 
     X = df[feature_cols].values.astype(np.float32)
     y = df[target].astype(int).values
     symbols = df["symbol"].values if "symbol" in df.columns else None
-    log.info("usable: %d rows x %d features (after NaN filter)",
-             len(df), len(feature_cols))
+
+    # Auto-scale embargo to label horizon if caller passed 0 — h overlapping
+    # bars otherwise contaminate train/test.
+    h = _horizon_from_target(target)
+    if embargo <= 0:
+        embargo = h + 1
+    # Overlapping-label sample weights ≈ 1/h flat (López de Prado simplification).
+    if use_overlap_weights and h > 1:
+        sample_w = np.full(len(df), 1.0 / h, dtype=np.float32)
+    else:
+        sample_w = np.ones(len(df), dtype=np.float32)
+    log.info("usable: %d rows x %d features (NaN-filtered); h=%d embargo=%d overlap_w=%s",
+             len(df), len(feature_cols), h, embargo, use_overlap_weights)
 
     base_params = dict(_DEFAULT_LGB)
     if params_override:
@@ -156,8 +177,8 @@ def _train_gbm(df: pd.DataFrame, target: str, feature_cols: list[str], out_dir: 
     fold_id = 0
     for tr_idx, va_idx, te_idx in _walk_forward_indices(len(df), n_folds=5, embargo=embargo):
         fold_id += 1
-        Xtr, ytr = X[tr_idx], y[tr_idx]
-        Xva, yva = X[va_idx], y[va_idx]
+        Xtr, ytr, wtr = X[tr_idx], y[tr_idx], sample_w[tr_idx]
+        Xva, yva, wva = X[va_idx], y[va_idx], sample_w[va_idx]
         Xte, yte = X[te_idx], y[te_idx]
 
         if use_lgb:
@@ -165,8 +186,8 @@ def _train_gbm(df: pd.DataFrame, target: str, feature_cols: list[str], out_dir: 
             for seed in range(n_seeds):
                 params = dict(base_params, seed=seed, bagging_seed=seed,
                               feature_fraction_seed=seed)
-                train_ds = lgb.Dataset(Xtr, ytr)
-                val_ds = lgb.Dataset(Xva, yva, reference=train_ds)
+                train_ds = lgb.Dataset(Xtr, ytr, weight=wtr)
+                val_ds = lgb.Dataset(Xva, yva, weight=wva, reference=train_ds)
                 booster = lgb.train(
                     params, train_ds,
                     num_boost_round=2000,

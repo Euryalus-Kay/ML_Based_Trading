@@ -151,11 +151,32 @@ def run_backtest(dataset_path: str, model_dir: str,
     # Buy-and-hold benchmark (already computed above)
     bench_m = _equity_metrics(bench, bpy)
 
+    # Explicit SPY outperformance test: did our net strategy beat SPY?
+    # Load SPY close from storage if available; else fall back to bench.
+    try:
+        from mlbt.core.storage import Storage as _Storage
+        spy = _Storage().read("yf_1h", "SPY")
+        if spy.empty:
+            spy = _Storage().read("yf_daily", "SPY")
+        if not spy.empty and "close" in spy.columns:
+            spy_ret = spy["close"].astype(float).pct_change().reindex(strat_ret.index).fillna(0)
+            spy_m = _equity_metrics(spy_ret, bpy)
+        else:
+            spy_m = bench_m
+    except Exception:
+        spy_m = bench_m
+    beats_spy = (
+        (net_m.get("ann_return") or 0) > (spy_m.get("ann_return") or 0)
+        and (net_m.get("sharpe") or 0) > (spy_m.get("sharpe") or 0)
+    )
+
     report = {
         "config": cfg.__dict__,
         "gross": gross_m,
         "net": net_m,
         "benchmark_long_always": bench_m,
+        "benchmark_spy": spy_m,
+        "beats_spy": bool(beats_spy),
         "directional_accuracy": float((
             (df["raw_pos"] != 0) &
             (np.sign(df["raw_pos"]) == np.sign(df["fwd_ret"]))

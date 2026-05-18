@@ -28,7 +28,7 @@ from mlbt.features import (
     add_targets,
     add_time_of_day_features,
 )
-from mlbt.features.targets import add_residualised_targets  # noqa: F401  (defined below)
+from mlbt.features.targets import add_residualised_targets, add_xsec_rank_targets  # noqa: F401
 from mlbt.pipeline.align import build_aligned_frame
 from mlbt.pipeline.collect import load_universe
 
@@ -99,6 +99,9 @@ def build_dataset(start, end, *,
 
     dataset = pd.concat(frames)
     dataset = dataset.sort_index()
+    # Add cross-sectional rank targets (must be done after concat so we can
+    # rank ACROSS symbols at each timestamp). Uses y_resid_logret_h as source.
+    dataset = add_xsec_rank_targets(dataset, horizons=horizons)
     # Drop rows where the target horizon is unobservable (NaN of largest horizon)
     largest_h = max(horizons)
     target_col = f"y_logret_{largest_h}"

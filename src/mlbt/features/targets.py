@@ -15,6 +15,35 @@ import numpy as np
 import pandas as pd
 
 
+def add_xsec_rank_targets(dataset: pd.DataFrame,
+                           horizons=(1, 3, 6, 12),
+                           src_col_pattern: str = "y_resid_logret_{}",
+                           top_quantile: float = 0.5) -> pd.DataFrame:
+    """Cross-sectional rank targets.
+
+    For each bar timestamp, rank the future residualised return ACROSS symbols
+    and label the top `top_quantile` as 1, bottom as 0. Fold-stationary,
+    perfectly balanced, isolates relative-performance signal.
+
+    Adds columns: y_xsec_top_h (1 if pct_rank > top_quantile else 0).
+    Requires `dataset` to contain a 'symbol' column and the source residualised
+    return column for each horizon.
+    """
+    out = dataset.copy()
+    if "symbol" not in out.columns:
+        return out
+    for h in horizons:
+        src = src_col_pattern.format(h)
+        if src not in out.columns:
+            continue
+        ranks = out.groupby(level=0)[src].rank(pct=True, method="average")
+        label = (ranks > top_quantile).astype("float64")
+        # mask rows where src is NaN
+        label = label.mask(out[src].isna())
+        out[f"y_xsec_top_{h}"] = label
+    return out
+
+
 def add_vol_scaled_targets(df: pd.DataFrame, horizons=(1, 3, 6, 12),
                             vol_window: int = 60,
                             threshold_mult: float = 0.5) -> pd.DataFrame:
