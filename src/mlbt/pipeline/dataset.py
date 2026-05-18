@@ -28,7 +28,9 @@ from mlbt.features import (
     add_targets,
     add_time_of_day_features,
 )
-from mlbt.features.targets import add_residualised_targets, add_xsec_rank_targets  # noqa: F401
+from mlbt.features.targets import (
+    add_residualised_targets, add_xsec_rank_targets, add_vol_scaled_targets,
+)
 from mlbt.pipeline.align import build_aligned_frame
 from mlbt.pipeline.collect import load_universe
 
@@ -69,6 +71,12 @@ def build_dataset(start, end, *,
         log.warning("aligned frame is empty; collect data first")
         return pd.DataFrame()
 
+    # Enrich the wide frame with derived/regime features BEFORE per-symbol
+    # featurisation, so scalar regime features (dispersion, vol regime,
+    # risk-on factor) propagate into every symbol's training rows.
+    from mlbt.features.regime import enrich_with_derived
+    wide = enrich_with_derived(wide, target_symbols)
+
     market_df = wide  # keep full frame for cross-asset features
     frames = []
     for sym in target_symbols:
@@ -82,6 +90,7 @@ def build_dataset(start, end, *,
         bars = add_cross_asset_features(bars, market_df, sym)
         bars = add_targets(bars, horizons=horizons)
         bars = add_residualised_targets(bars, market_df, horizons=horizons)
+        bars = add_vol_scaled_targets(bars, horizons=horizons, threshold_mult=0.5)
         bars["symbol"] = sym
         # join scalar/index features (FRED, calendar, sentiment) that aren't symbol-specific
         scalar_cols = [c for c in wide.columns if not any(
