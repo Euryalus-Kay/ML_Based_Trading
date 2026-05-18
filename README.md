@@ -1,91 +1,130 @@
 # ML_Based_Trading
 
-## Production strategy (current winner)
+## Production strategy
 
-**Strategy:** `xs8_LongOnlyTop10` — long top-10 stocks by an 8-hour-ahead
-cross-sectional rank model, rebalance every hour, no shorts, leverage 1.0.
+**Strategy:** `xs8_LongOnlyTop10` — long the 10 cross-sectionally-best-ranked
+mega-cap stocks at each 1-hour bar, score from a LightGBM model trained on the
+y_xsec_top_8 (8-hour-ahead residualised-return rank) target. No shorts.
 
-**Universe:** 49 S&P 500 mega-caps × 1-hour bars × 2024-05 → 2026-05.
+**Universe:** 42 of 49 S&P 500 mega-caps (config/universe.yaml) × 1-hour bars ×
+2024-05 → 2026-05. 1 415 trades/year (well over the 200/yr deployability gate).
 
-**Risk-adjusted performance vs SPY buy-and-hold (same window, net of cost):**
+**Reproduced 2026-05-18 on Mac Studio M4 Max** after fixing the
+`xsmom_{sym}_{w}` feature-explosion bug (commit 4c62cf8) that previously made
+the full-SP500 dataset build run out of RAM during the parquet write. See
+[the dataset patch](src/mlbt/pipeline/dataset.py).
+
+### Performance vs SPY buy-and-hold (same window, net of cost)
 
 | Regime | Net Sharpe | vs SPY | Ann Return | Max DD | Trades/yr |
 |---|---:|---:|---:|---:|---:|
-| PAPER (2 bps cost + 1 bp slip) | **2.39** | 2.3× SPY | 13.4 % | -8.5 %  | ~1 400 |
-| RETAIL (5 + 2 bps)             | **1.60** | 1.5× SPY | 9.0 %  | -9.3 %  | ~1 400 |
-| RETAIL_k15                     | **1.71** | 1.6× SPY | 8.3 %  | -8.9 %  | ~1 400 |
-| SPY benchmark                  | 1.05     | —        | 16.8 % | -34 %   | — |
+| PAPER (2 + 1 bps)               | **2.43** | 2.3× SPY | 12.7 % | **-10.5 %** | ~1 400 |
+| RETAIL (5 + 2 bps)              | **1.69** | 1.6× SPY | 8.8 %  | -10.9 %     | ~1 400 |
+| SPY benchmark                   | 1.05     | —        | 16.8 % | -19.4 %     | — |
 
-Wins on Sharpe in 4 of 5 realism regimes (fails only at SMALL_CAP 10 + 5 bps,
-not applicable to mega-caps). Drawdown 1/4 of SPY's. Levered 1.26× to match
-SPY's vol would produce ~21 % ann return at ~17 % vol — still Sharpe 1.6.
+Realism audit (5 progressively pessimistic regimes via
+`mlbt.realism_audit`, single-config position sizing rather than
+top-K — different number from the table above but a stricter
+test):
+
+| HEROIC | PAPER | RETAIL | SMALL_CAP | DEFENSIVE |
+|---:|---:|---:|---:|---:|
+| 1.93 | 1.57 | 1.21 | **0.51** | 1.61 |
+
+All five regimes are ≥ 0.5 net Sharpe — the hard gate from the
+handoff. SMALL_CAP barely makes it; this strategy is **not** for
+illiquid names. Equity curve: [docs/equity_curve.png](docs/equity_curve.png).
 
 ### How to reproduce
 
 ```bash
 # 1. Setup
+git clone https://github.com/Euryalus-Kay/ML_Based_Trading.git
+cd ML_Based_Trading
 git checkout claude/stock-trading-ml-data-system-aBleI
 pip install -r requirements.txt && pip install -e .
-pip install lightgbm scikit-learn
+pip install lightgbm scikit-learn torch torchvision torchaudio coremltools matplotlib
 
-# 2. Pull data (1h bars, 49 names, 2024-05 → 2026-05)
+# 2. Pull data (1h bars, 49 mega-caps + cross-asset, 2024-05 → 2026-05)
 PYTHONPATH=src python -m mlbt.cli collect \
   --start 2024-05-20 --end 2026-05-17 \
+  --universe config/universe.yaml \
   --only yf_1h --only fred --only treasury_yields \
   --only calendar_events --only crypto_fear_greed
 
-# 3. Build dataset (~10 min)
+# 3. Build dataset (~1 min on Mac Studio M4 with the xsmom fix)
 PYTHONPATH=src python -m mlbt.cli build-dataset \
   --start 2024-05-20 --end 2026-05-17 --bar 1h \
-  --out data/dataset_1h.parquet --horizons 1,2,4,8 \
+  --universe config/universe.yaml \
+  --out data/dataset_1h_micro.parquet --horizons 1,2,4,8 \
   --only-source yf_1h --only-source fred --only-source treasury_yields \
   --only-source calendar_events --only-source crypto_fear_greed
 
-# 4. Train winning config
-PYTHONPATH=src python -c "
-from mlbt.ml.train import train_model
-train_model('data/dataset_1h.parquet', target='y_xsec_top_8',
-            model='gbm', out_dir='data/alpha_tournament/xs8_seeds3',
-            n_seeds=3, embargo=0, symbol_onehot=True)"
+# 4. Train + backtest + realism-audit in a single call
+PYTHONPATH=src python -m mlbt.candidate_eval \
+  --dataset data/dataset_1h_micro.parquet --target y_xsec_top_8 \
+  --out data/cand_xs8_v1 --top-k 10 --seeds 3
 
-# 5. Backtest
-PYTHONPATH=src python -c "
-from mlbt.backtest.portfolio import PortfolioConfig, run_portfolio_backtest
-cfg = PortfolioConfig(horizon=8, bar='1h', target_col='y_resid_logret_8',
-                      entry_lag_bars=1, top_k=10, bottom_k=0,
-                      bps_per_trade=5.0, slippage_bps=2.0, market_neutral=False)
-print(run_portfolio_backtest('data/dataset_1h.parquet',
-      'data/alpha_tournament/xs8_seeds3', cfg=cfg)['net'])"
+# 5. Save equity curve PNG + summary JSON
+PYTHONPATH=src python -m mlbt.winner_pkg \
+  data/cand_xs8_v1 data/dataset_1h_micro.parquet
 ```
+
+Training takes ~5 min on the M4 Max (15 LightGBM seed×fold runs across all
+10 cores). The full backtest + audit adds ~30 s.
+
+### Walk-forward across history (the open gate)
+
+The handoff asks for a strategy that beats SPY on Sharpe OR Calmar in 4 of 5
+sub-windows spanning ≥ 10 years. Current state:
+
+- **`vol_target` SPY** (classical, no ML) over 2005–2026: beats SPY on Calmar
+  in 3 of 5 windows, Sharpe in 2 of 5. Robust on the Pre-2010 / 2017-2022 /
+  2022-2026 windows; loses in pure-bull 2009-2013 and 2013-2017.
+- **`xs5 LONG_ONLY_k10` daily ML** over 2010–2026 (4 trainable windows after
+  excluding pre-2010 since training history starts at 2006): beats SPY 0/4
+  on Sharpe and 0/4 on Calmar. DD lower in 3/4. ML on daily bars is too noisy
+  to harvest cross-sectional alpha at this universe size.
+- **Stacked (0.2 × ML + 0.8 × vol_target)**: beats SPY 1/4 on Sharpe AND
+  Calmar in 2018-2022 (the COVID + 2022 drawdown window), DD better in 4/4.
+  Doesn't yet hit 4/5.
+
+The full SP500 (~503 names) 1h dataset build is now possible after the
+xsmom fix — but on the M4 it still pegs ~14 GB and 12 + min, so it was set
+aside in favour of validating the proven 1h-49 winner. A future iteration
+could re-train the same target on the larger universe; the cross-section
+would be richer for short-horizon rank prediction.
 
 ### Known weaknesses
 
-- **Trained on a single regime** (2024-05 → 2026-05 bull market). Needs
-  walk-forward across 2018-19 and 2022 bear periods to confirm robustness.
-  Mac handoff (HANDOFF_PROMPT.md) covers this in step 6.
-- **Universe is 49 mega-caps**. The bulk pull for full S&P 500 was queued
-  but didn't finish on the cloud VM; rerun locally for richer cross-section.
-- **Long-only at horizon 8h** — this is essentially a smart momentum-rotation
-  on 1-day-ahead winners. Sharpe collapses in SMALL_CAP cost regime, so
-  not applicable to illiquid names.
-- **Classical baseline still beats on absolute return**: `vol_target` SPY
-  (Sharpe 0.76, vs raw SPY 0.75) is a separate winner from a different
-  strategy class. Stacking both (use ML when score-spread is wide, fall
-  back to vol_target otherwise) is the obvious next step.
+- **In-sample window is just 2024–2026 (bull)**. The walk-forward results
+  above are honest: the daily-bar ML model trained on 5y rolling history
+  does not reproduce the 1h winner's edge. Either the alpha is genuinely
+  short-horizon (1h-specific microstructure) or the daily-bar feature
+  engineering is too noisy. **Do not trade this without paper-running
+  over the next 6-12 months across at least one drawdown.**
+- **Universe is 42 mega-caps** (universe.yaml). Some intended SP500 names
+  weren't in the yf_1h pull and are missing; this likely reduces the
+  cross-sectional ranking edge slightly.
+- **No options / overnight-Asia features**. The handoff lists CBOE option-
+  chain IV-skew and Stooq Asia/Europe overnight closes as the next leverage
+  points. Neither is implemented yet — both should be tried in iteration 3.
+- **DD criterion not strictly met in every walk-forward window** (fails the
+  worst-case 2022-2026 ML drawdown). Vol_target stacking is needed to
+  pass; tune w_ml per window or use a regime-switch.
 
 ### Baseline (no-ML reference)
 
 `vol_target` SPY rescales position so realised vol stays at 12 % annualised
-(capped 1.5× leverage). Over the same 2010-2026 window:
+(capped 1.5×). Over 2010–2026:
 
 | | vol_target | SPY buy-hold |
 |---|---:|---:|
-| Sharpe | **0.76** | 0.75 |
-| Calmar | **0.59** | 0.38 |
-| Max DD | **-16.5 %** | -34.1 % |
+| Sharpe | **0.63** | 0.54 |
+| Calmar | **0.25** | 0.18 |
+| Max DD | **-32.0 %** | -56.5 % |
 
-Robust in 3 of 5 walk-forward sub-windows; smaller drawdown in EVERY window.
-Reproducible via `PYTHONPATH=src python -m mlbt.cli classical`.
+Reproducible: `PYTHONPATH=src python -m mlbt.cli classical`.
 
 ---
 
