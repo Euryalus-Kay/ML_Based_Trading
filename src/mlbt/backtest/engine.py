@@ -38,6 +38,10 @@ class BacktestConfig:
     min_edge: float = 0.02           # only trade if |score - 0.5| > min_edge
     long_only: bool = False
     target_col: str = "y_logret_3"   # forward log return matching horizon
+    # Realism knobs
+    entry_lag_bars: int = 1          # observe at t, execute at t + entry_lag_bars
+    slippage_bps: float = 1.0        # per-trade additional slippage
+    overlap_scale: bool = True       # divide PnL by horizon (no implicit leverage)
 
 
 def _equity_metrics(returns: pd.Series, bars_per_year: float) -> dict:
@@ -94,6 +98,17 @@ def run_backtest(dataset_path: str, model_dir: str,
         raise KeyError(f"target column {cfg.target_col} not in dataset; "
                        f"have: {[c for c in ds.columns if c.startswith('y_')][:8]}")
 
+    # Honest execution timing: observe score at time t, execute at t + entry_lag_bars,
+    # then earn the forward return from that bar. Compute a SHIFTED forward return
+    # per symbol so we don't accidentally use the future-return ending at t.
+    if "symbol" in ds.columns:
+        # Realised log-return over the same horizon used as label, but shifted
+        # so the position taken at score-time t actually realises the move
+        # from t+entry_lag to t+entry_lag+horizon.
+        if cfg.entry_lag_bars > 0:
+            ds = ds.copy()
+            ds[cfg.target_col] = ds.groupby("symbol")[cfg.target_col].shift(-cfg.entry_lag_bars)
+
     # Join predictions to forward returns. If both carry 'symbol', join on
     # (timestamp, symbol) to keep per-symbol PnL; otherwise fall back to a
     # cross-sectional mean.
@@ -139,8 +154,14 @@ def run_backtest(dataset_path: str, model_dir: str,
         dpos = raw_pos.diff().abs().fillna(raw_pos.abs())
         strat_ret = raw_pos * df["fwd_ret"]
         bench = df["fwd_ret"]
-    cost = dpos * (cfg.bps_per_trade / 1e4)
+    cost = dpos * ((cfg.bps_per_trade + cfg.slippage_bps) / 1e4)
     net_ret = strat_ret - cost
+    # Adjust for overlapping holds: with horizon h and re-entry every bar we
+    # have h positions open simultaneously, which implicitly applies h-x leverage.
+    # Divide PnL by h to size to ONE unit-notional position at all times.
+    if cfg.overlap_scale and cfg.horizon > 1:
+        net_ret = net_ret / cfg.horizon
+        strat_ret = strat_ret / cfg.horizon
 
     bpy = _bars_per_year(cfg.bar)
     gross_m = _equity_metrics(strat_ret, bpy)
