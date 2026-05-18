@@ -78,6 +78,36 @@ def build_dataset(start, end, *,
     wide = enrich_with_derived(wide, target_symbols)
 
     market_df = wide  # keep full frame for cross-asset features
+    # Pre-compute the truly scalar columns (those NOT ending in _{symbol} for ANY symbol).
+    # Without this fix every per-symbol frame inherited 565 * len(windows) xsmom cols
+    # because xsmom_AAPL_5 doesn't end in "_AAPL" (it ends in "_5"). We now filter
+    # so each per-symbol frame keeps only ITS OWN xsmom_{sym}_w columns plus the
+    # universe scalars (FRED, regime, dispersion, etc).
+    sym_suffixes = set(target_symbols)
+    truly_scalar = []
+    per_symbol_owned: dict[str, list[str]] = {s: [] for s in target_symbols}
+    for c in wide.columns:
+        # Treat xsmom_{sym}_w specifically — keep only the relevant sym's column
+        if c.startswith("xsmom_"):
+            try:
+                _, sym_part, _ = c.split("_", 2)
+            except ValueError:
+                truly_scalar.append(c)
+                continue
+            if sym_part in sym_suffixes:
+                per_symbol_owned.setdefault(sym_part, []).append(c)
+            else:
+                truly_scalar.append(c)
+            continue
+        # Generic suffix _{symbol}: belongs to that symbol (close_AAPL, volume_AAPL ...)
+        matched = False
+        for s in sym_suffixes:
+            if c.endswith(f"_{s}"):
+                matched = True
+                break
+        if not matched:
+            truly_scalar.append(c)
+
     frames = []
     for sym in target_symbols:
         bars = _symbol_ohlcv(wide, sym)
@@ -92,13 +122,18 @@ def build_dataset(start, end, *,
         bars = add_residualised_targets(bars, market_df, horizons=horizons)
         bars = add_vol_scaled_targets(bars, horizons=horizons, threshold_mult=0.5)
         bars["symbol"] = sym
-        # join scalar/index features (FRED, calendar, sentiment) that aren't symbol-specific
-        scalar_cols = [c for c in wide.columns if not any(
-            c.endswith(f"_{s}") for s in target_symbols)]
-        # Avoid duplicate columns
-        scalar_cols = [c for c in scalar_cols if c not in bars.columns]
+
+        # Truly scalar features (FRED, regime, dispersion) — same for every symbol
+        scalar_cols = [c for c in truly_scalar if c not in bars.columns]
         if scalar_cols:
             bars = bars.join(wide[scalar_cols], how="left")
+        # This symbol's own xsmom columns (xsmom_{sym}_5, xsmom_{sym}_20, ...)
+        own_xsmom = [c for c in per_symbol_owned.get(sym, []) if c not in bars.columns]
+        if own_xsmom:
+            bars = bars.join(wide[own_xsmom], how="left")
+            # Rename to drop the sym so the column name is the same across symbols
+            bars = bars.rename(columns={c: c.replace(f"_{sym}_", "_self_")
+                                          for c in own_xsmom})
         bars = bars.dropna(how="all")
         frames.append(bars)
 
