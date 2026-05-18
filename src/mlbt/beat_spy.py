@@ -47,15 +47,11 @@ def _is_profitable(row: dict) -> bool:
 
 CONFIGS = [
     # (name, target, params, seeds, embargo, onehot, horizon_for_backtest)
-    ("xsec_h1_seeds5",        "y_xsec_top_1", None,  5,  0, True,  1),
-    ("xsec_h2_seeds5",        "y_xsec_top_2", None,  5,  0, True,  2),
-    ("xsec_h4_seeds5",        "y_xsec_top_4", None,  5,  0, True,  4),
-    ("xsec_h8_seeds5",        "y_xsec_top_8", None,  5,  0, True,  8),
-    ("resid_h1_seeds5",       "y_resid_up_1", None,  5,  0, True,  1),
-    ("resid_h2_seeds5",       "y_resid_up_2", None,  5,  0, True,  2),
-    ("resid_h4_seeds5",       "y_resid_up_4", None,  5,  0, True,  4),
-    ("vol_h2_seeds5",         "y_vol_up_2",   None,  5,  0, True,  2),
-    ("vol_h4_seeds5",         "y_vol_up_4",   None,  5,  0, True,  4),
+    # Lean sweep so it actually finishes; targets the 4 most-promising combos.
+    ("xsec_h2_seeds3",        "y_xsec_top_2", None,  3,  0, True,  2),
+    ("xsec_h4_seeds3",        "y_xsec_top_4", None,  3,  0, True,  4),
+    ("resid_h2_seeds3",       "y_resid_up_2", None,  3,  0, True,  2),
+    ("vol_h4_seeds3",         "y_vol_up_4",   None,  3,  0, True,  4),
 ]
 
 
