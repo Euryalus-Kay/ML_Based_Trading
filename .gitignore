@@ -1,0 +1,33 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Data + caches (committed examples only)
+data/raw/
+data/aligned/
+data/cache/
+data/*.parquet
+data/*.duckdb
+data/*.sqlite
+.requests_cache.sqlite
+
+# Secrets
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
