@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import pickle
 import time
 from pathlib import Path
@@ -29,6 +30,30 @@ import pandas as pd
 from mlbt.core.log import get_logger
 
 log = get_logger("train")
+
+
+def _best_torch_device() -> str:
+    """MPS > CUDA > CPU. Apple Silicon (Mac Studio etc) lands on MPS."""
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def _num_workers() -> int:
+    """For DataLoader. On Apple Silicon, performance cores only — cap at 8."""
+    n = os.cpu_count() or 4
+    return max(1, min(n - 1, 8))
+
+
+def _lgb_num_threads() -> int:
+    """LightGBM honors num_threads. Use all available CPU cores."""
+    return os.cpu_count() or 4
 
 
 # ----- Feature / target selection helpers ----------------------------------
@@ -120,6 +145,8 @@ _DEFAULT_LGB = {
     "bagging_freq": 5,
     "lambda_l2": 1.0,
     "verbosity": -1,
+    # Apple Silicon: LightGBM is multi-threaded; use every performance core.
+    "num_threads": _lgb_num_threads(),
 }
 
 
@@ -252,7 +279,10 @@ def _train_lstm(df: pd.DataFrame, target: str, feature_cols: list[str],
         return {"error": f"PyTorch unavailable: {e}"}
 
     from mlbt.ml.dataset_torch import SequenceDataset
-    from mlbt.ml.models import LSTMClassifier, TransformerClassifier, PatchTSTLite
+    from mlbt.ml.models import (
+        LSTMClassifier, TransformerClassifier, PatchTSTLite,
+        LSTMXL, TransformerXL, PatchTSTXL,
+    )
 
     df = df.sort_index().dropna(subset=[target])
     df = df.dropna(subset=feature_cols, how="any")
@@ -280,7 +310,7 @@ def _train_lstm(df: pd.DataFrame, target: str, feature_cols: list[str],
     if len(train_ds) == 0 or len(val_ds) == 0:
         return {"error": "not enough sequence samples"}
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = _best_torch_device()
     log.info("training %s on device=%s, train=%d val=%d test=%d",
              model_kind, device, len(train_ds), len(val_ds), len(test_ds))
 
@@ -290,9 +320,15 @@ def _train_lstm(df: pd.DataFrame, target: str, feature_cols: list[str],
     elif model_kind == "transformer":
         model = TransformerClassifier(n_features=n_features)
     elif model_kind == "patchtst":
-        # Choose patch_size that divides window
         ps = 8 if window % 8 == 0 else 4
         model = PatchTSTLite(n_features=n_features, window=window, patch_size=ps)
+    elif model_kind == "lstm_xl":
+        model = LSTMXL(n_features=n_features)
+    elif model_kind == "transformer_xl":
+        model = TransformerXL(n_features=n_features)
+    elif model_kind == "patchtst_xl":
+        ps = 8 if window % 8 == 0 else 4
+        model = PatchTSTXL(n_features=n_features, window=window, patch_size=ps)
     else:
         return {"error": f"unknown model_kind {model_kind}"}
     model = model.to(device)
@@ -301,9 +337,15 @@ def _train_lstm(df: pd.DataFrame, target: str, feature_cols: list[str],
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
     bce = torch.nn.BCEWithLogitsLoss()
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=True)
-    val_loader = DataLoader(val_ds, batch_size=batch_size)
-    test_loader = DataLoader(test_ds, batch_size=batch_size)
+    nw = _num_workers()
+    pin = (device == "cuda")  # MPS doesn't benefit from pinned memory
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                                drop_last=True, num_workers=nw, pin_memory=pin,
+                                persistent_workers=nw > 0)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, num_workers=nw,
+                              pin_memory=pin, persistent_workers=nw > 0)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, num_workers=nw,
+                                pin_memory=pin)
 
     best_val = float("inf")
     best_state = None
@@ -402,7 +444,8 @@ def train_model(dataset_path: str, target: str = "y_up_3",
         return _train_gbm(df, target, feature_cols, out_p,
                             n_seeds=n_seeds, embargo=embargo,
                             params_override=params_override)
-    if model in ("lstm", "transformer", "patchtst"):
+    if model in ("lstm", "transformer", "patchtst",
+                  "lstm_xl", "transformer_xl", "patchtst_xl"):
         return _train_lstm(df, target, feature_cols, out_p, window=window,
                             epochs=epochs, model_kind=model)
     raise ValueError(f"unknown model {model}")
