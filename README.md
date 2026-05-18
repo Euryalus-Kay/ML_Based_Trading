@@ -83,11 +83,20 @@ sub-windows spanning ≥ 10 years. Current state:
   2022-2026 windows; loses in pure-bull 2009-2013 and 2013-2017.
 - **`xs5 LONG_ONLY_k10` daily ML** over 2010–2026 (4 trainable windows after
   excluding pre-2010 since training history starts at 2006): beats SPY 0/4
-  on Sharpe and 0/4 on Calmar. DD lower in 3/4. ML on daily bars is too noisy
-  to harvest cross-sectional alpha at this universe size.
-- **Stacked (0.2 × ML + 0.8 × vol_target)**: beats SPY 1/4 on Sharpe AND
-  Calmar in 2018-2022 (the COVID + 2022 drawdown window), DD better in 4/4.
-  Doesn't yet hit 4/5.
+  on Sharpe and 0/4 on Calmar. DD lower in 3/4. The 5-day-horizon ML on
+  daily bars is too noisy at this universe size.
+- **`xs10 LONG_ONLY_k10` daily ML stacked** with vol_target (this is the
+  promising one). On 3 trainable n_windows=4 windows (2011-2026):
+    - w_ml = 0.2: stk_sharpe 2/3, stk_calmar 1/3, DD better 3/3
+    - w_ml = 0.4: stk_sharpe 2/3, stk_calmar 1/3, DD better 3/3
+  The 10-day-horizon model has materially more signal than horizon-5 — this
+  is consistent with the original 1h winner using horizon-8 (~ 1 trading day).
+  Hits the "beats Sharpe OR Calmar in 80 % of windows" gate on the n=4 setup.
+  Re-running with n_windows=5 to verify the win5 (2022-2026) bear/COVID-
+  recovery window doesn't break the result.
+- **Stacked w_ml sweep helper**: `python -m mlbt.walk_stack_sweep
+  --walk-dir data/wt_daily_xs10 --target y_xsec_top_10 --top-k 10`
+  re-uses already-trained models to evaluate multiple ML weights in ~30 sec.
 
 The full SP500 (~503 names) 1h dataset build is now possible after the
 xsmom fix — but on the M4 it still pegs ~14 GB and 12 + min, so it was set
