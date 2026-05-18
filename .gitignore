@@ -9,13 +9,9 @@ dist/
 venv/
 env/
 
-# Data + caches (committed examples only)
-data/raw/
-data/aligned/
-data/cache/
-data/*.parquet
-data/*.duckdb
-data/*.sqlite
+# Data + caches (entirely generated — never commit)
+data/*
+!data/.gitkeep
 .requests_cache.sqlite
 
 # Secrets
