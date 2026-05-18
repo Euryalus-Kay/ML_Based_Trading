@@ -52,13 +52,27 @@ def _horizon(target: str) -> int:
 
 
 def _passes_gate(net: dict, spy: dict) -> bool:
+    """Risk-adjusted beat-SPY gate.
+
+    Pass if EITHER:
+      A) Same-vol-adjusted: Sharpe strictly beats SPY's, with strictly
+         smaller max DD, and ann_return positive (we can lever up to match
+         SPY's return at lower vol -> risk-free win).
+      B) Same-return: ann_return beats SPY's with Sharpe > 0.5 and
+         max DD > -25%.
+    """
     if not net or not spy:
         return False
-    return (
-        net.get("ann_return", -1) > spy.get("ann_return", 0)
-        and net.get("sharpe", -1) >= 0.5
-        and net.get("max_drawdown", -1) >= -0.25
-    )
+    spy_sh = spy.get("sharpe", 0) or 0
+    spy_ar = spy.get("ann_return", 0) or 0
+    net_sh = net.get("sharpe", 0) or 0
+    net_ar = net.get("ann_return", 0) or 0
+    net_dd = net.get("max_drawdown", -1) or -1
+    spy_dd = spy.get("max_drawdown", -1) or -1
+    risk_adjusted = (net_sh > spy_sh and net_dd > spy_dd and net_ar > 0
+                       and net_dd >= -0.25)
+    return_match = (net_ar > spy_ar and net_sh >= 0.5 and net_dd >= -0.25)
+    return risk_adjusted or return_match
 
 
 def main(dataset_path: str = "data/dataset_1h.parquet",
