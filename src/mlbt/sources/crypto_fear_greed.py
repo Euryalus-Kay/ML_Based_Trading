@@ -36,5 +36,6 @@ class CryptoFearGreed(DataSource):
             "fear_greed_class": r["value_classification"],
         } for r in payload]
         df = pd.DataFrame(rows).set_index("ts").sort_index()
-        return df.loc[(df.index >= pd.Timestamp(start, tz="UTC")) &
-                      (df.index <= pd.Timestamp(end, tz="UTC"))]
+        from mlbt.core.base import to_utc
+        return df.loc[(df.index >= to_utc(start)) &
+                      (df.index <= to_utc(end))]

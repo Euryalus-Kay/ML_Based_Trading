@@ -67,6 +67,5 @@ class FredAnonymous(DataSource):
         out = pd.concat(frames, axis=1).sort_index()
         # Shift to next-business-day 14:00 UTC (close-of-business release proxy)
         out.index = out.index.normalize() + pd.Timedelta(days=1) + pd.Timedelta(hours=14)
-        s_ts = pd.Timestamp(start, tz="UTC")
-        e_ts = pd.Timestamp(end, tz="UTC")
-        return out.loc[(out.index >= s_ts) & (out.index <= e_ts)]
+        from mlbt.core.base import to_utc
+        return out.loc[(out.index >= to_utc(start)) & (out.index <= to_utc(end))]

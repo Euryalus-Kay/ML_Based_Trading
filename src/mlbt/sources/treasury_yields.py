@@ -73,5 +73,5 @@ class TreasuryYields(DataSource):
         if not frames:
             return pd.DataFrame()
         out = pd.concat(frames).sort_index()
-        return out.loc[(out.index >= pd.Timestamp(start, tz="UTC")) &
-                       (out.index <= pd.Timestamp(end, tz="UTC"))]
+        from mlbt.core.base import to_utc
+        return out.loc[(out.index >= to_utc(start)) & (out.index <= to_utc(end))]

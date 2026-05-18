@@ -119,5 +119,28 @@ def cmd_backtest(dataset, model_dir, out):
         print(f"  {k}: {v}")
 
 
+@main.command("audit-sources")
+@click.option("--hours", default=48, help="Lookback window for each source")
+def cmd_audit_sources(hours):
+    """Probe each data source: is it real-time accessible? How fresh?"""
+    from mlbt.live import audit_sources
+    df = audit_sources(lookback_hours=hours)
+    print(df.to_string(index=False))
+
+
+@main.command("live-predict")
+@click.option("--model-dir", default="data/model_gbm")
+@click.option("--bar", default="1h")
+@click.option("--lookback-days", default=60)
+def cmd_live_predict(model_dir, bar, lookback_days):
+    """Pull latest data, featurise, score with the trained model. Output ranked signals."""
+    from mlbt.live import live_predict
+    df = live_predict(model_dir=model_dir, bar=bar, lookback_days=lookback_days)
+    if df.empty:
+        print("(no live predictions — check audit-sources)")
+    else:
+        print(df.to_string(index=False))
+
+
 if __name__ == "__main__":
     main()

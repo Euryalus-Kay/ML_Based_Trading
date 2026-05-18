@@ -72,10 +72,12 @@ class GdeltDaily(DataSource):
     publish_lag = pd.Timedelta(hours=2)
 
     def fetch(self, start, end, **kw: Any) -> pd.DataFrame:
-        start_ts = pd.Timestamp(start).normalize()
-        end_ts = pd.Timestamp(end).normalize()
-        if start_ts < pd.Timestamp("2013-04-01"):
-            start_ts = pd.Timestamp("2013-04-01")  # GKG starts here
+        from mlbt.core.base import to_utc
+        start_ts = to_utc(start).normalize()
+        end_ts = to_utc(end).normalize()
+        gkg_start = to_utc("2013-04-01")
+        if start_ts < gkg_start:
+            start_ts = gkg_start  # GKG starts here
         dates = pd.date_range(start_ts, end_ts, freq="1D")
         frames = []
         for d in dates:

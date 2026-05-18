@@ -42,5 +42,5 @@ class NoaaSpaceWeather(DataSource):
             return pd.DataFrame()
         df["kp_index"] = pd.to_numeric(df[kp_col], errors="coerce")
         out = df[["kp_index"]].dropna()
-        return out.loc[(out.index >= pd.Timestamp(start, tz="UTC")) &
-                       (out.index <= pd.Timestamp(end, tz="UTC"))]
+        from mlbt.core.base import to_utc
+        return out.loc[(out.index >= to_utc(start)) & (out.index <= to_utc(end))]

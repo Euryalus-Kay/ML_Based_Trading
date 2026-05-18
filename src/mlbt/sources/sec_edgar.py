@@ -86,6 +86,5 @@ class SecEdgar(DataSource):
         if not out:
             return pd.DataFrame()
         df = pd.concat(out).sort_index()
-        s_ts = pd.Timestamp(start, tz="UTC")
-        e_ts = pd.Timestamp(end, tz="UTC")
-        return df.loc[(df.index >= s_ts) & (df.index <= e_ts)]
+        from mlbt.core.base import to_utc
+        return df.loc[(df.index >= to_utc(start)) & (df.index <= to_utc(end))]

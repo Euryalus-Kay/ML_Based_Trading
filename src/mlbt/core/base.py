@@ -103,3 +103,16 @@ class DataSource(abc.ABC):
 
 def now_utc() -> pd.Timestamp:
     return pd.Timestamp(dt.datetime.now(tz=dt.timezone.utc))
+
+
+def to_utc(ts) -> pd.Timestamp:
+    """Coerce any timestamp-like to a tz-aware UTC pd.Timestamp.
+
+    Handles tz-naive (assumed UTC) and tz-aware inputs uniformly so callers
+    don't have to deal with `pd.Timestamp(x, tz=...)` which raises on
+    already-tz-aware inputs.
+    """
+    t = pd.Timestamp(ts)
+    if t.tz is None:
+        return t.tz_localize("UTC")
+    return t.tz_convert("UTC")
