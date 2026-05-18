@@ -23,7 +23,15 @@ log = get_logger("collect")
 
 def load_universe(path: Optional[str] = None) -> dict:
     cfg_path = Path(path) if path else Path("config/universe.yaml")
-    return yaml.safe_load(cfg_path.read_text())
+    u = yaml.safe_load(cfg_path.read_text())
+    # If a tickers-file is referenced, merge its contents into equities.sp500_full
+    tickers_file = u.get("sp500_tickers_file")
+    if tickers_file and Path(tickers_file).exists():
+        with open(tickers_file) as f:
+            tickers = [t.strip() for t in f if t.strip() and not t.startswith("#")]
+        u.setdefault("equities", {})
+        u["equities"]["sp500_full"] = tickers
+    return u
 
 
 def _equity_symbols(universe: dict) -> list[str]:

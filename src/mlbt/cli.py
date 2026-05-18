@@ -128,6 +128,13 @@ def cmd_audit_sources(hours):
     print(df.to_string(index=False))
 
 
+@main.command("classical")
+def cmd_classical():
+    """Run the classical no-ML strategies (vol-target, trend, VIX-filter) vs SPY."""
+    from mlbt.strategies.vol_target import run_all_classical
+    run_all_classical()
+
+
 @main.command("live-predict")
 @click.option("--model-dir", default="data/model_gbm")
 @click.option("--bar", default="1h")
