@@ -167,19 +167,39 @@ def run_portfolio_backtest(dataset_path: str, model_dir: str,
     gross = _equity_metrics(pnl_df["gross_pnl"], bpy)
     net = _equity_metrics(pnl_df["net_pnl"], bpy)
 
-    # SPY benchmark over the same window
+    # SPY benchmark over the same window. Prefer matching-bar source first;
+    # otherwise as-of merge from daily (so a daily backtest stretching back to
+    # 2010 isn't compared against an empty 1h SPY series).
     try:
         from mlbt.core.storage import Storage as _Storage
-        spy = _Storage().read("yf_1h", "SPY")
-        if spy.empty:
-            spy = _Storage().read("yf_daily", "SPY")
+        _st = _Storage()
+        if cfg.bar in ("1h", "5min", "15min", "1min"):
+            spy = _st.read("yf_1h", "SPY")
+            if spy.empty:
+                spy = _st.read("yf_daily", "SPY")
+        else:
+            spy = _st.read("yf_daily", "SPY")
+            if spy.empty:
+                spy = _st.read("yf_1h", "SPY")
         if not spy.empty and "close" in spy.columns:
-            spy_ret = (spy["close"].astype(float).pct_change()
-                                                  .reindex(pnl_df.index).fillna(0))
+            spy_close = spy["close"].astype(float).sort_index()
+            spy_ret = spy_close.pct_change()
+            # Align to pnl_df.index via as-of merge so daily benchmark slots
+            # correctly into a non-daily PnL grid (or vice-versa).
+            ts_idx = pnl_df.index
+            if len(ts_idx) and len(spy_ret):
+                if ts_idx.tz is None and spy_ret.index.tz is not None:
+                    ts_idx = ts_idx.tz_localize("UTC")
+                if ts_idx.tz is not None and spy_ret.index.tz is None:
+                    spy_ret.index = spy_ret.index.tz_localize("UTC")
+                spy_ret = (spy_ret.reindex(ts_idx.union(spy_ret.index))
+                                  .sort_index().ffill()
+                                  .reindex(ts_idx).fillna(0))
             spy_m = _equity_metrics(spy_ret, bpy)
         else:
             spy_m = {}
-    except Exception:
+    except Exception as _e:  # noqa: BLE001
+        log.warning("SPY benchmark lookup failed: %s", _e)
         spy_m = {}
 
     beats_spy = (
