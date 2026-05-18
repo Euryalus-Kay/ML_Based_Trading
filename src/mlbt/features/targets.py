@@ -71,7 +71,11 @@ def add_vol_scaled_targets(df: pd.DataFrame, horizons=(1, 3, 6, 12),
 
 def add_residualised_targets(df: pd.DataFrame, market_df: pd.DataFrame,
                               horizons=(1, 3, 6, 12),
-                              market_col_candidates=("close_^GSPC", "close_SPY", "close_^NDX")) -> pd.DataFrame:
+                              market_col_candidates=(
+                                  "close_^GSPC", "close__GSPC",
+                                  "close_SPY", "close__SPY",
+                                  "close_^NDX", "close__NDX",
+                              )) -> pd.DataFrame:
     """Add residualised targets: y_resid_logret_h = symbol_logret - mkt_logret.
 
     Removes the dominant common market factor. A model trained on this
