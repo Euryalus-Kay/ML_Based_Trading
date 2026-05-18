@@ -25,6 +25,7 @@ indices:
   # ^DXY is unreliable on Yahoo — we use the UUP ETF (in sector_etfs) instead.
 
 sector_etfs:
+  - SPY        # S&P 500 — primary benchmark to beat
   - XLF        # Financials
   - XLK        # Tech
   - XLE        # Energy
