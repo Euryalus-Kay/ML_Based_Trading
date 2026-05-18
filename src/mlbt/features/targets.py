@@ -15,6 +15,31 @@ import numpy as np
 import pandas as pd
 
 
+def add_vol_scaled_targets(df: pd.DataFrame, horizons=(1, 3, 6, 12),
+                            vol_window: int = 60,
+                            threshold_mult: float = 0.5) -> pd.DataFrame:
+    """Vol-scaled labels: only label up/down if the move exceeds k * sigma.
+
+    Reduces label noise: a 1bp move on a stock with 50bp vol gets discarded
+    rather than being labelled as "up". Discarded rows train models on
+    informative samples only. Returns extra cols y_vol_up_h ∈ {0,1,NaN}.
+    """
+    out = df.copy()
+    if "close" not in out:
+        return out
+    c = out["close"].astype(float)
+    log_ret = np.log(c / c.shift(1))
+    realised_vol = log_ret.rolling(vol_window, min_periods=max(5, vol_window // 2)).std()
+    for h in horizons:
+        fwd = np.log(c.shift(-h) / c)
+        threshold = realised_vol * threshold_mult * np.sqrt(h)
+        label = pd.Series(np.nan, index=c.index, dtype="float64")
+        label[fwd > threshold] = 1.0
+        label[fwd < -threshold] = 0.0
+        out[f"y_vol_up_{h}"] = label
+    return out
+
+
 def add_residualised_targets(df: pd.DataFrame, market_df: pd.DataFrame,
                               horizons=(1, 3, 6, 12),
                               market_col_candidates=("close_^GSPC", "close_SPY", "close_^NDX")) -> pd.DataFrame:
