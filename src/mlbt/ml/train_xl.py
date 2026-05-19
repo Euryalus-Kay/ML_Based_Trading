@@ -151,34 +151,42 @@ class MultiTaskNet:
 
 
 # ----- dataset --------------------------------------------------------------
-def _seq_dataset(df, feature_cols, target_cols, window):
+try:
     import torch
-    from torch.utils.data import Dataset
+    from torch.utils.data import Dataset as _Dataset
+except ImportError:
+    _Dataset = object  # type: ignore
 
-    class MultiTargetSequenceDataset(Dataset):
-        def __init__(self, frame, feats, targets, win):
-            self.samples = []
-            for sym, sub in frame.groupby("symbol"):
-                sub = sub.sort_index()
-                X = sub[feats].values.astype(np.float32)
-                Y = sub[targets].values.astype(np.float32)
-                for i in range(win, len(sub)):
-                    y = Y[i]
-                    if np.isnan(y).any():
-                        continue
-                    wx = X[i - win:i]
-                    if np.isnan(wx).any():
-                        continue
-                    self.samples.append((wx, y))
-            log.info("seq dataset: %d samples (window=%d, features=%d, targets=%d)",
-                     len(self.samples), win, len(feats), len(targets))
 
-        def __len__(self):
-            return len(self.samples)
+class MultiTargetSequenceDataset(_Dataset):
+    """Top-level so DataLoader workers can pickle it."""
+    def __init__(self, frame, feats, targets, win):
+        self.samples = []
+        for sym, sub in frame.groupby("symbol"):
+            sub = sub.sort_index()
+            X = sub[feats].values.astype(np.float32)
+            Y = sub[targets].values.astype(np.float32)
+            for i in range(win, len(sub)):
+                y = Y[i]
+                if np.isnan(y).any():
+                    continue
+                wx = X[i - win:i]
+                if np.isnan(wx).any():
+                    continue
+                self.samples.append((wx, y))
+        log.info("seq dataset: %d samples (window=%d, features=%d, targets=%d)",
+                 len(self.samples), win, len(feats), len(targets))
 
-        def __getitem__(self, i):
-            wx, y = self.samples[i]
-            return torch.from_numpy(wx), torch.from_numpy(y)
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, i):
+        import torch
+        wx, y = self.samples[i]
+        return torch.from_numpy(wx), torch.from_numpy(y)
+
+
+def _seq_dataset(df, feature_cols, target_cols, window):
     return MultiTargetSequenceDataset(df, feature_cols, target_cols, window)
 
 
@@ -241,13 +249,14 @@ def train_xl_multitask(dataset_path: str, out_dir: str,
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=cfg.epochs)
         bce = torch.nn.BCEWithLogitsLoss(reduction="none")
 
-        nw = max(1, min((os.cpu_count() or 4) - 1, 6))
+        # MPS doesn't need pinned memory, and MPS+forked workers is buggy on
+        # macOS — use 0 workers so we keep all GPU bandwidth for the model.
+        nw = 0
         pin = (device == "cuda")
         train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,
-                                    drop_last=True, num_workers=nw, pin_memory=pin,
-                                    persistent_workers=nw > 0)
+                                    drop_last=True, num_workers=nw, pin_memory=pin)
         val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, num_workers=nw,
-                                  pin_memory=pin, persistent_workers=nw > 0)
+                                  pin_memory=pin)
         test_loader = DataLoader(test_ds, batch_size=cfg.batch_size, num_workers=nw,
                                    pin_memory=pin)
 
