@@ -49,6 +49,29 @@ ledger, last cycle) so the process can crash-restart cleanly.
   `mlbt.trading.runner.TradingRunner` — main loop, market-hours check,
     SIGINT/SIGTERM flatten, graceful crash-restart.
 
+### Verified live-step (M4 Max, latest data)
+
+  Built features for 42 mega-caps from the live 1h dataset, ran GBM
+  inference in ~17 s, picked top-10 = **EOG, META, TSLA, TGT, MU, AMZN,
+  INTC, BAC, CVX, WFC**. Submitted 10 paper-buy orders, opened positions
+  at full-equity-weight, slippage cost ~$60 on $100 k. State persisted to
+  `data/trading_state/`. Identical code paths will run against Alpaca
+  paper or live with the broker flag swapped.
+
+### Inference backend notes (Apple Silicon)
+
+  - **GBM (LightGBM .pkl)** — current production. CPU, ~17 s for 42 symbols
+    including data-pull, ~150 ms for inference alone. Fast enough for hourly
+    rebalances.
+  - **Torch on MPS** — `mlbt.ml.train_xl` trains PatchTST-XL / Transformer-XL
+    / LSTM-XL with multi-task heads (xs1/xs2/xs4/xs8 jointly) on MPS, capped
+    at `--max-features` to fit in MPS memory. Did not find significantly
+    more signal than LightGBM on this 49-cap universe — the cross-sectional
+    rank target is a weak learner for sequence models at 1h granularity.
+  - **CoreML on the Apple Neural Engine** — `mlbt.ml.coreml_export` is wired
+    up (multi-task state_dict support added) but only useful once a torch
+    model with a real signal is found. Would give sub-ms latency per symbol.
+
 ---
 
 ## Production strategy
