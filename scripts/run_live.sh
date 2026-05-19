@@ -15,7 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p data/trading_state
 exec env PYTHONUNBUFFERED=1 PYTHONPATH=src python3.11 -m mlbt.trading.runner \
-    --model-dir data/cand_xs8_v1 \
+    --model-dir data/cand_xs4_v1 \
     --bar 1h \
     --top-k 10 \
     --broker alpaca --paper \
