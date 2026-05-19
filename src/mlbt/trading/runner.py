@@ -73,6 +73,15 @@ class TradingRunner:
     # ----- one cycle ------------------------------------------------------
     def step(self) -> dict:
         ts = pd.Timestamp.utcnow().tz_convert("UTC")
+        # 0. Cancel any orders still pending from prior cycles so we have a
+        # clean slate. Avoids the bug where successive cycles submitted the
+        # full top-10 again because pending orders weren't counted as
+        # in-flight positions.
+        if hasattr(self.broker, "cancel_all_open_orders"):
+            n_cancelled = self.broker.cancel_all_open_orders()
+            if n_cancelled:
+                log.info("cancelled %d pending orders from prior cycle", n_cancelled)
+
         # 1. Score
         scores = self.signal.score_now(ts)
         if scores.empty:

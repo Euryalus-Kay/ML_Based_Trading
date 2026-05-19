@@ -89,6 +89,9 @@ class PaperBrokerAdapter(BrokerAdapter):
     def is_market_open(self) -> bool:
         return True   # paper broker is always "open"
 
+    def cancel_all_open_orders(self) -> int:
+        return 0   # in-process paper fills immediately; no concept of pending
+
 
 class AlpacaBrokerAdapter(BrokerAdapter):
     """Alpaca paper or live trading. Honors ALPACA_KEY / ALPACA_SECRET /
@@ -156,6 +159,15 @@ class AlpacaBrokerAdapter(BrokerAdapter):
             return bool(self.client.get_clock().is_open)
         except Exception:
             return False
+
+    def cancel_all_open_orders(self) -> int:
+        """Cancel anything still pending so the next step has a clean slate."""
+        try:
+            results = self.client.cancel_orders()
+            return len(results) if results else 0
+        except Exception as e:  # noqa: BLE001
+            log.warning("alpaca cancel_orders failed: %s", e)
+            return 0
 
 
 def make_broker(cfg, tracker: PositionTracker) -> BrokerAdapter:
