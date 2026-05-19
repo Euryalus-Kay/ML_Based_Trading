@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from mlbt.core.log import get_logger
 from mlbt.trading.broker import make_broker, PaperBrokerAdapter
 from mlbt.trading.config import TradingConfig
+from mlbt.trading.exits import ExitTracker
 from mlbt.trading.oms import OrderManagementSystem
 from mlbt.trading.positions import PositionTracker
 from mlbt.trading.risk import RiskManager
@@ -51,6 +52,7 @@ class TradingRunner:
         )
         self.broker = make_broker(cfg, self.tracker)
         self.risk = RiskManager(cfg, state_path=str(self.state_dir / "risk.json"))
+        self.exits = ExitTracker(state_path=str(self.state_dir / "exits.json"))
         # Cached signal generator: ~2 sec per cycle after the first
         # ~35-sec warm-up (vs 35 sec every cycle with the vanilla one).
         SignalCls = CachedSignalGenerator if getattr(cfg, "use_signal_cache", True) else LiveSignalGenerator
@@ -117,35 +119,32 @@ class TradingRunner:
                                               prices, equity,
                                               min_order_dollars=50.0)
 
-        # 4b. Per-symbol stop-loss / profit-take override.
-        # If any position's unrealised P&L crosses a threshold, force-close it
-        # even if it's still in the model's target list.
+        # 4b. Refresh per-position exit-tracker state (high-mark, bars-held,
+        # latest score) and check each open position against the full exit
+        # rules: stop-loss, profit-take, trailing-stop, score-decay, time-exit.
+        # Any triggered exit overrides whatever the model thinks.
+        from mlbt.trading.oms import Order
+        scores_by_sym = {row.symbol: float(row.y_score)
+                         for row in scores.itertuples()}
+        entry_prices = {s: (self._position_entry_price(s) or prices.get(s, 0.0))
+                        for s in current_positions if current_positions[s] != 0}
+        self.exits.update_on_step(current_positions, prices, scores_by_sym, ts, entry_prices)
+
         stops_triggered = []
-        if getattr(self.cfg, "enable_stops", True):
-            from mlbt.trading.oms import Order
-            for s, qty in current_positions.items():
-                if qty == 0 or s not in prices:
-                    continue
-                tp = self._position_entry_price(s)
-                if tp is None or tp <= 0:
-                    continue
-                pl_pct = (prices[s] - tp) / tp
-                hit_stop = pl_pct <= self.cfg.stop_loss_pct
-                hit_target = pl_pct >= self.cfg.profit_take_pct
-                if hit_stop or hit_target:
-                    why = "STOP" if hit_stop else "PROFIT_TAKE"
-                    side = "sell" if qty > 0 else "buy"
-                    # Remove any existing OMS order on this symbol and replace
-                    # with an immediate full close.
-                    orders = [o for o in orders if o.symbol != s]
-                    orders.insert(0, Order(symbol=s, qty=abs(qty), side=side,
-                                              target_weight=0.0,
-                                              ref_price=prices[s]))
-                    stops_triggered.append({"symbol": s, "kind": why,
-                                              "pl_pct": pl_pct, "entry": tp,
-                                              "current": prices[s]})
-                    log.warning("%s triggered on %s: P&L %.2f%% (entry $%.2f → $%.2f)",
-                                why, s, pl_pct*100, tp, prices[s])
+        for s, qty in current_positions.items():
+            if qty == 0 or s not in prices:
+                continue
+            decision = self.exits.check(s, prices[s], self.cfg)
+            if decision is None:
+                continue
+            side = "sell" if qty > 0 else "buy"
+            orders = [o for o in orders if o.symbol != s]
+            orders.insert(0, Order(symbol=s, qty=abs(qty), side=side,
+                                      target_weight=0.0, ref_price=prices[s]))
+            stops_triggered.append({"symbol": s, "kind": decision.reason,
+                                      "detail": decision.detail,
+                                      "pl_pct": decision.pl_pct})
+            log.warning("EXIT %s on %s: %s", decision.reason.upper(), s, decision.detail)
 
         # 5. Optional kill-switch
         bar_pnl = equity - self._last_equity

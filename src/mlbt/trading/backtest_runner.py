@@ -44,6 +44,16 @@ def replay(model_dir: str, dataset_path: str, out_path: Optional[str] = None,
             sizing_mode: str = "equal",
             enable_kill_switch: bool = False,
             max_drawdown_kill: float = -0.30,
+            # Live-mode exit rules (off by default to preserve alpha-only mode)
+            enable_stops: bool = False,
+            stop_loss_pct: float = -0.08,
+            profit_take_pct: float = 0.20,
+            enable_trailing_stop: bool = False,
+            trailing_stop_pct: float = -0.05,
+            enable_score_decay_exit: bool = False,
+            decay_score_threshold: float = 0.495,
+            enable_time_exit: bool = False,
+            max_hold_bars: int = 32,
             start_equity: float = 100_000.0) -> dict:
     model_p = Path(model_dir)
     preds = pd.read_parquet(model_p / "predictions.parquet")
@@ -79,11 +89,23 @@ def replay(model_dir: str, dataset_path: str, out_path: Optional[str] = None,
                           sizing_mode=sizing_mode,
                           enable_kill_switch=enable_kill_switch,
                           max_drawdown_kill=max_drawdown_kill,
+                          enable_stops=enable_stops,
+                          stop_loss_pct=stop_loss_pct,
+                          profit_take_pct=profit_take_pct,
+                          enable_trailing_stop=enable_trailing_stop,
+                          trailing_stop_pct=trailing_stop_pct,
+                          enable_score_decay_exit=enable_score_decay_exit,
+                          decay_score_threshold=decay_score_threshold,
+                          enable_time_exit=enable_time_exit,
+                          max_hold_bars=max_hold_bars,
                           poll_seconds=0)
     tracker = PositionTracker(equity=start_equity)
     broker = PaperBrokerAdapter(tracker, slippage_bps=bps_per_trade + slippage_bps)
     oms = OrderManagementSystem(cfg)
     risk = RiskManager(cfg)
+    # Per-position exit tracker (lazy import to avoid cycles)
+    from mlbt.trading.exits import ExitTracker
+    exits = ExitTracker()
 
     # Group predictions by timestamp so we step the same way as the live runner
     preds = preds.reset_index().rename(columns={"index": "ts"})
@@ -144,20 +166,50 @@ def replay(model_dir: str, dataset_path: str, out_path: Optional[str] = None,
         else:
             bars_since_rebalance += 1
 
+        # Exit-tracker bookkeeping every bar (not just rebalance bars)
+        current_positions = broker.get_positions()
+        scores_by_sym = dict(zip(scored["symbol"], scored["y_score"]))
+        # Entry prices: tracker.positions[sym].avg_price (broker is in-process)
+        entry_prices = {s: (tracker.positions[s].avg_price
+                            if s in tracker.positions else ts_prices.get(s, 0))
+                        for s, q in current_positions.items() if q != 0}
+        exits.update_on_step(current_positions, ts_prices, scores_by_sym,
+                              pd.Timestamp(ts), entry_prices)
+
         orders = []
         if do_rebalance and last_targets is not None:
-            orders = oms.targets_to_orders(last_targets, broker.get_positions(),
+            orders = oms.targets_to_orders(last_targets, current_positions,
                                               ts_prices, equity_before)
-            for o in orders:
-                broker.submit_order(o.symbol, o.qty, o.side, ref_price=o.ref_price)
-                n_orders_total += 1
+
+        # Exit overrides every bar — force-close any position whose exit
+        # rule has tripped, regardless of whether this is a rebalance bar
+        from mlbt.trading.oms import Order
+        n_exits = 0
+        for s, qty in list(current_positions.items()):
+            if qty == 0 or s not in ts_prices:
+                continue
+            decision = exits.check(s, ts_prices[s], cfg)
+            if decision is None:
+                continue
+            orders = [o for o in orders if o.symbol != s]
+            side = "sell" if qty > 0 else "buy"
+            orders.insert(0, Order(symbol=s, qty=abs(qty), side=side,
+                                      target_weight=0.0,
+                                      ref_price=ts_prices[s]))
+            n_exits += 1
+
+        for o in orders:
+            broker.submit_order(o.symbol, o.qty, o.side, ref_price=o.ref_price)
+            n_orders_total += 1
 
         equity_after = broker.get_equity()
         bar_pnl = equity_after - equity_before
         breach = risk.update(equity_after, bar_pnl)
         equity_curve.append({"ts": str(ts), "equity": equity_after,
                                "bar_pnl": bar_pnl, "n_orders": len(orders),
-                               "gross": targets.gross(),
+                               "n_exits": n_exits,
+                               "n_held": sum(1 for q in current_positions.values() if q != 0),
+                               "gross": targets.gross() if 'targets' in dir() and targets else 0.0,
                                "halted": bool(breach and breach.severity == "halt")})
 
     # Compute metrics
@@ -176,17 +228,46 @@ def replay(model_dir: str, dataset_path: str, out_path: Optional[str] = None,
     ann_ret = mu * bpy
     calmar = ann_ret / abs(drawdown) if drawdown < 0 else float("inf")
 
+    # Production metrics
+    universe_size = preds["symbol"].nunique()
+    bars_per_day = bpy / 252.0
+    trading_days = n_bars / bars_per_day
+    rebalances = n_bars / cfg.rebalance_every_bars
+    signals_per_day = universe_size * bars_per_day        # all symbols scored every bar
+    opportunities_per_day = top_k * (rebalances / trading_days)  # top-k rebalances/day
+    trades_per_day = n_orders_total / max(trading_days, 1)
+    daily_pnl_mean = eq["ret"].sum() * start_equity / max(trading_days, 1)
+    n_exit_events = int(eq["n_exits"].sum()) if "n_exits" in eq.columns else 0
+    # Capital deployment: average gross exposure
+    avg_gross = float(eq.get("gross", pd.Series([0])).mean())
+
     summary = {
-        "n_bars": n_bars, "start_equity": start_equity,
+        "n_bars": n_bars,
+        "trading_days": round(trading_days, 1),
+        "universe_size": universe_size,
+        "start_equity": start_equity,
         "end_equity": float(eq["equity"].iloc[-1]),
         "total_return": float(total_ret), "ann_return": float(ann_ret),
         "sharpe": float(sharpe), "max_drawdown": float(drawdown),
-        "calmar": float(calmar), "n_orders_total": n_orders_total,
+        "calmar": float(calmar),
+        # Opportunity / activity metrics
+        "n_orders_total": n_orders_total,
+        "trades_per_day": round(trades_per_day, 1),
+        "signals_per_day": round(signals_per_day, 1),
+        "opportunities_per_day": round(opportunities_per_day, 1),
+        "rebalances_total": int(rebalances),
+        "n_exit_events": n_exit_events,
+        "avg_gross_exposure": round(avg_gross, 3),
+        "daily_pnl_mean": round(daily_pnl_mean, 2),
         "halted_at": halted_at,
         "cfg": dict(top_k=top_k, bottom_k=bottom_k,
                      market_neutral=market_neutral,
                      bps_per_trade=bps_per_trade, slippage_bps=slippage_bps,
-                     entry_lag_bars=entry_lag_bars),
+                     entry_lag_bars=entry_lag_bars,
+                     enable_stops=enable_stops,
+                     enable_trailing_stop=enable_trailing_stop,
+                     enable_score_decay_exit=enable_score_decay_exit,
+                     enable_time_exit=enable_time_exit),
     }
 
     if out_path:
@@ -197,12 +278,19 @@ def replay(model_dir: str, dataset_path: str, out_path: Optional[str] = None,
         log.info("wrote %s and %s", out_p, out_p.with_suffix(".parquet"))
 
     print(f"\n=== live-replay backtest ===")
-    print(f"Sharpe:  {sharpe:.2f}")
-    print(f"Ann ret: {ann_ret:.2%}")
-    print(f"Max DD:  {drawdown:.2%}")
-    print(f"Total:   {total_ret:.2%}")
-    print(f"Orders:  {n_orders_total}")
-    print(f"End eq:  ${eq['equity'].iloc[-1]:,.0f}")
+    print(f"Universe:               {universe_size} stocks  |  {trading_days:.0f} trading days  |  {n_bars} bars")
+    print(f"Sharpe:                 {sharpe:.2f}")
+    print(f"Ann return:             {ann_ret:.2%}")
+    print(f"Max DD:                 {drawdown:.2%}")
+    print(f"Total return:           {total_ret:.2%}")
+    print(f"End equity:             ${eq['equity'].iloc[-1]:,.0f}")
+    print(f"Avg daily P&L:          ${daily_pnl_mean:.0f}")
+    print(f"Signals/day evaluated:  {signals_per_day:.0f}")
+    print(f"Opportunities/day picked: {opportunities_per_day:.1f}")
+    print(f"Trades/day:             {trades_per_day:.1f}")
+    print(f"Total orders:           {n_orders_total}")
+    print(f"Exit events fired:      {n_exit_events}")
+    print(f"Avg gross exposure:     {avg_gross:.0%}")
     return summary
 
 

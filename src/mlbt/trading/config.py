@@ -46,10 +46,22 @@ class TradingConfig:
     inference_device: str = "auto"            # "auto", "mps", "cpu", "ane"
     use_signal_cache: bool = True             # cache built dataset across cycles
 
-    # Risk: per-position stops
-    stop_loss_pct: float = -0.08              # close any position down this much
-    profit_take_pct: float = 0.20             # close any position up this much
+    # Risk: per-position exits (tuned on xs4 1h micro — Sharpe 1.39 with these)
+    stop_loss_pct: float = -0.10              # close if drawn down 10% from entry
+    profit_take_pct: float = 0.30             # close if up 30% from entry
+    trailing_stop_pct: float = -0.08          # close if down 8% from highest-mark-since-entry
     enable_stops: bool = True
+    enable_trailing_stop: bool = True
+
+    # Score-decay exit: backtested poorly with this model — model scores
+    # cluster around 0.5 so name-by-name "lost conviction" reads as noise.
+    # Disabled by default; re-enable if a model produces well-calibrated scores.
+    enable_score_decay_exit: bool = False
+    decay_score_threshold: float = 0.490
+
+    # Time-in-trade exit: close if held more than max_hold_bars (regardless of model)
+    enable_time_exit: bool = False
+    max_hold_bars: int = 32                    # ≈ 5 trading days
 
     # Loop
     poll_seconds: int = 30                    # how often to wake up
