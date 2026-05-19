@@ -23,6 +23,7 @@ class TradingConfig:
     # Execution
     entry_lag_bars: int = 1
     bps_slippage_estimate: float = 5.0  # for pre-trade ETA only
+    rebalance_every_bars: int = 1       # 1 = every bar; h = match horizon-h backtest
 
     # Risk
     max_gross_exposure: float = 1.5
