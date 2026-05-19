@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>mlbt — paper trading</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='main.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<header>
+  <div class="brand">mlbt <span class="paper-tag">PAPER</span></div>
+  <div class="market-state" id="market-state">market: …</div>
+  <div class="now" id="now">…</div>
+</header>
+
+<main>
+
+<section class="cards">
+  <div class="card">
+    <div class="label">Equity</div>
+    <div class="value big" id="equity">—</div>
+    <div class="sub" id="equity-day">vs $100k start</div>
+  </div>
+  <div class="card">
+    <div class="label">Cash</div>
+    <div class="value" id="cash">—</div>
+  </div>
+  <div class="card">
+    <div class="label">Buying power</div>
+    <div class="value" id="buying-power">—</div>
+  </div>
+  <div class="card">
+    <div class="label">Unrealised P&amp;L</div>
+    <div class="value" id="unreal-pnl">—</div>
+    <div class="sub" id="unreal-pnl-pct">—</div>
+  </div>
+  <div class="card">
+    <div class="label">Status</div>
+    <div class="value small" id="risk-status">—</div>
+    <div class="sub" id="risk-detail">—</div>
+  </div>
+</section>
+
+<section class="row">
+  <div class="panel wide">
+    <h2>Equity curve</h2>
+    <canvas id="equity-chart" height="120"></canvas>
+  </div>
+</section>
+
+<section class="row">
+  <div class="panel">
+    <h2>Open positions</h2>
+    <table id="positions">
+      <thead><tr>
+        <th>Symbol</th><th class="r">Qty</th><th class="r">Avg</th>
+        <th class="r">Last</th><th class="r">MV</th><th class="r">P&amp;L</th><th class="r">%</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>Latest top-10 signal scores</h2>
+    <p class="hint" id="signal-ts">—</p>
+    <table id="signals">
+      <thead><tr>
+        <th>#</th><th>Symbol</th><th class="r">Score</th><th class="r">Edge</th><th class="r">Weight</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="row">
+  <div class="panel wide">
+    <h2>Recent orders</h2>
+    <table id="orders">
+      <thead><tr>
+        <th>Submitted</th><th>Symbol</th><th>Side</th>
+        <th class="r">Qty</th><th class="r">Fill px</th><th>Status</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+
+<script>
+let chart = null;
+
+function fmt$(v) {
+  if (v == null) return '—';
+  return '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits:0});
+}
+function fmtNum(v, d=2) {
+  if (v == null) return '—';
+  return Number(v).toFixed(d);
+}
+function fmtPct(v, d=2) {
+  if (v == null) return '—';
+  return (Number(v)*100).toFixed(d) + '%';
+}
+function badgeClass(v) {
+  if (v == null || isNaN(v)) return '';
+  return v >= 0 ? 'pos' : 'neg';
+}
+
+function renderPositions(positions) {
+  const tb = document.querySelector('#positions tbody');
+  tb.innerHTML = '';
+  if (!positions.length) {
+    tb.innerHTML = '<tr><td colspan="7" class="empty">no positions</td></tr>';
+    return;
+  }
+  positions.sort((a,b) => b.market_value - a.market_value);
+  for (const p of positions) {
+    const cls = badgeClass(p.unrealized_pl);
+    tb.innerHTML += `<tr>
+      <td>${p.symbol}</td>
+      <td class="r">${fmtNum(p.qty, 2)}</td>
+      <td class="r">$${fmtNum(p.avg_entry_price)}</td>
+      <td class="r">$${fmtNum(p.current_price)}</td>
+      <td class="r">${fmt$(p.market_value)}</td>
+      <td class="r ${cls}">${fmt$(p.unrealized_pl)}</td>
+      <td class="r ${cls}">${fmtPct(p.unrealized_plpc)}</td>
+    </tr>`;
+  }
+}
+
+function renderOrders(orders) {
+  const tb = document.querySelector('#orders tbody');
+  tb.innerHTML = '';
+  if (!orders.length) {
+    tb.innerHTML = '<tr><td colspan="6" class="empty">no orders</td></tr>';
+    return;
+  }
+  for (const o of orders.slice(0, 20)) {
+    const sideCls = o.side === 'buy' ? 'pos' : 'neg';
+    tb.innerHTML += `<tr>
+      <td>${o.ts}</td>
+      <td>${o.symbol}</td>
+      <td class="${sideCls}">${o.side}</td>
+      <td class="r">${fmtNum(o.qty, 2)}</td>
+      <td class="r">${o.filled_avg_price ? '$'+fmtNum(o.filled_avg_price) : '—'}</td>
+      <td>${o.status}</td>
+    </tr>`;
+  }
+}
+
+function renderSignals(sig) {
+  const tb = document.querySelector('#signals tbody');
+  const ts = document.querySelector('#signal-ts');
+  tb.innerHTML = '';
+  if (!sig || !sig.scores) {
+    tb.innerHTML = '<tr><td colspan="5" class="empty">no signal yet — runner hasn\'t scored this cycle</td></tr>';
+    ts.textContent = '—';
+    return;
+  }
+  ts.textContent = 'as of ' + (sig.ts || '');
+  for (let i = 0; i < sig.scores.length && i < 10; i++) {
+    const s = sig.scores[i];
+    const cls = i < 10 ? 'pos' : '';
+    tb.innerHTML += `<tr>
+      <td>${i+1}</td>
+      <td><strong>${s.symbol}</strong></td>
+      <td class="r">${fmtNum(s.score, 4)}</td>
+      <td class="r ${cls}">${fmtNum(s.edge, 4)}</td>
+      <td class="r">${fmtPct(s.weight)}</td>
+    </tr>`;
+  }
+}
+
+function renderEquityChart(eq) {
+  if (!eq || !eq.length) return;
+  const ctx = document.getElementById('equity-chart').getContext('2d');
+  const labels = eq.map(r => (r.ts || '').slice(0,16));
+  const data = eq.map(r => Number(r.equity));
+
+  if (chart) {
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = data;
+    chart.update();
+    return;
+  }
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Equity',
+        data,
+        borderColor: '#3a86ff',
+        backgroundColor: 'rgba(58,134,255,0.08)',
+        fill: true,
+        pointRadius: 0,
+        tension: 0.15,
+        borderWidth: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 200 },
+      scales: {
+        x: { ticks: { color:'#888', maxRotation: 0, autoSkipPadding: 30 } },
+        y: { ticks: { color:'#888', callback: v=>'$'+v.toLocaleString() } },
+      },
+      plugins: { legend: { display: false } },
+    },
+  });
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/state');
+    const j = await r.json();
+    if (j.error) {
+      document.body.classList.add('errored');
+      document.getElementById('market-state').textContent = 'error: ' + j.error;
+      return;
+    }
+    document.body.classList.remove('errored');
+
+    // Account
+    document.getElementById('equity').textContent = fmt$(j.account.equity);
+    const dayPct = (j.account.equity - 100000) / 100000;
+    document.getElementById('equity-day').textContent = (dayPct >= 0 ? '+' : '') +
+      (dayPct*100).toFixed(2) + '% vs $100k start';
+    document.getElementById('equity-day').className = 'sub ' + badgeClass(dayPct);
+    document.getElementById('cash').textContent = fmt$(j.account.cash);
+    document.getElementById('buying-power').textContent = fmt$(j.account.buying_power);
+
+    // Aggregate unrealised
+    let totalUn = 0, totalMV = 0;
+    for (const p of j.positions) { totalUn += p.unrealized_pl; totalMV += p.market_value; }
+    document.getElementById('unreal-pnl').textContent = fmt$(totalUn);
+    document.getElementById('unreal-pnl').className = 'value ' + badgeClass(totalUn);
+    document.getElementById('unreal-pnl-pct').textContent =
+      totalMV ? ((totalUn/totalMV*100).toFixed(2)+'% on $'+totalMV.toLocaleString()) : '—';
+
+    // Status
+    const halted = j.risk && j.risk.halted;
+    document.getElementById('risk-status').textContent = halted ? 'HALTED' : 'RUNNING';
+    document.getElementById('risk-status').className = 'value small ' + (halted ? 'neg' : 'pos');
+    document.getElementById('risk-detail').textContent = j.risk
+      ? (j.risk.halt_reason || 'no breach') : 'no risk data yet';
+
+    document.getElementById('market-state').textContent = 'market: ' +
+      (j.market_open ? 'OPEN' : 'closed');
+    document.getElementById('now').textContent = (j.now || '').slice(0, 19) + ' UTC';
+
+    renderPositions(j.positions || []);
+    renderOrders(j.recent_orders || []);
+    renderSignals(j.last_signal);
+    renderEquityChart(j.equity_curve || []);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

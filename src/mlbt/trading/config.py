@@ -44,6 +44,12 @@ class TradingConfig:
     # Inference
     use_coreml: bool = False                  # if mlpackage exists prefer it
     inference_device: str = "auto"            # "auto", "mps", "cpu", "ane"
+    use_signal_cache: bool = True             # cache built dataset across cycles
+
+    # Risk: per-position stops
+    stop_loss_pct: float = -0.08              # close any position down this much
+    profit_take_pct: float = 0.20             # close any position up this much
+    enable_stops: bool = True
 
     # Loop
     poll_seconds: int = 30                    # how often to wake up

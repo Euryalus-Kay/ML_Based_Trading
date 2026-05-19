@@ -20,6 +20,7 @@ import signal as posix_signal
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -31,6 +32,7 @@ from mlbt.trading.oms import OrderManagementSystem
 from mlbt.trading.positions import PositionTracker
 from mlbt.trading.risk import RiskManager
 from mlbt.trading.signal import LiveSignalGenerator
+from mlbt.trading.signal_cached import CachedSignalGenerator
 
 log = get_logger("runner")
 
@@ -49,7 +51,10 @@ class TradingRunner:
         )
         self.broker = make_broker(cfg, self.tracker)
         self.risk = RiskManager(cfg, state_path=str(self.state_dir / "risk.json"))
-        self.signal = LiveSignalGenerator(
+        # Cached signal generator: ~2 sec per cycle after the first
+        # ~35-sec warm-up (vs 35 sec every cycle with the vanilla one).
+        SignalCls = CachedSignalGenerator if getattr(cfg, "use_signal_cache", True) else LiveSignalGenerator
+        self.signal = SignalCls(
             model_dir=cfg.model_dir, bar=cfg.bar,
             universe_path=cfg.universe_path,
             use_coreml=cfg.use_coreml,
@@ -103,6 +108,36 @@ class TradingRunner:
                                               prices, equity,
                                               min_order_dollars=50.0)
 
+        # 4b. Per-symbol stop-loss / profit-take override.
+        # If any position's unrealised P&L crosses a threshold, force-close it
+        # even if it's still in the model's target list.
+        stops_triggered = []
+        if getattr(self.cfg, "enable_stops", True):
+            from mlbt.trading.oms import Order
+            for s, qty in current_positions.items():
+                if qty == 0 or s not in prices:
+                    continue
+                tp = self._position_entry_price(s)
+                if tp is None or tp <= 0:
+                    continue
+                pl_pct = (prices[s] - tp) / tp
+                hit_stop = pl_pct <= self.cfg.stop_loss_pct
+                hit_target = pl_pct >= self.cfg.profit_take_pct
+                if hit_stop or hit_target:
+                    why = "STOP" if hit_stop else "PROFIT_TAKE"
+                    side = "sell" if qty > 0 else "buy"
+                    # Remove any existing OMS order on this symbol and replace
+                    # with an immediate full close.
+                    orders = [o for o in orders if o.symbol != s]
+                    orders.insert(0, Order(symbol=s, qty=abs(qty), side=side,
+                                              target_weight=0.0,
+                                              ref_price=prices[s]))
+                    stops_triggered.append({"symbol": s, "kind": why,
+                                              "pl_pct": pl_pct, "entry": tp,
+                                              "current": prices[s]})
+                    log.warning("%s triggered on %s: P&L %.2f%% (entry $%.2f → $%.2f)",
+                                why, s, pl_pct*100, tp, prices[s])
+
         # 5. Optional kill-switch
         bar_pnl = equity - self._last_equity
         breach2 = self.risk.update(equity, bar_pnl)
@@ -132,7 +167,56 @@ class TradingRunner:
         # Persist last cycle report
         (self.state_dir / "last_cycle.json").write_text(
             json.dumps({"report": report, "orders": results}, indent=2))
+
+        # Persist the latest top-10 signal + weights for the dashboard
+        try:
+            top_n = scores.head(20).copy()
+            sig_rows = []
+            for _, r in top_n.iterrows():
+                sig_rows.append({
+                    "symbol": str(r.symbol),
+                    "score": float(r.y_score),
+                    "edge": float(r.get("edge", r.y_score - 0.5)),
+                    "weight": float(targets.weights.get(r.symbol, 0.0)),
+                    "close": float(r.close) if pd.notna(r.get("close")) else None,
+                })
+            (self.state_dir / "last_signal.json").write_text(json.dumps({
+                "ts": str(ts), "scores": sig_rows,
+                "top_k": self.cfg.top_k, "model_dir": self.cfg.model_dir,
+            }, indent=2, default=str))
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not write last_signal.json: %s", e)
+
+        # Append to the equity ledger so the dashboard can plot the curve
+        try:
+            eq_path = self.state_dir / "equity_ledger.csv"
+            line = f"{ts.isoformat()},{equity:.4f},{bar_pnl:.4f},{len(orders)},{int(self.risk.halted)}\n"
+            if not eq_path.exists():
+                eq_path.write_text("ts,equity,bar_pnl,n_orders,halted\n" + line)
+            else:
+                with eq_path.open("a") as f:
+                    f.write(line)
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not append equity_ledger: %s", e)
+
         return report
+
+    def _position_entry_price(self, symbol: str) -> Optional[float]:
+        """Look up avg entry price for a symbol from broker or local tracker."""
+        # PaperBrokerAdapter routes through tracker
+        if symbol in self.tracker.positions:
+            return self.tracker.positions[symbol].avg_price
+        # AlpacaBrokerAdapter — query Alpaca directly
+        try:
+            from alpaca.trading.client import TradingClient
+            if hasattr(self.broker, "client"):
+                positions = self.broker.client.get_all_positions()
+                for p in positions:
+                    if p.symbol == symbol:
+                        return float(p.avg_entry_price)
+        except Exception:
+            pass
+        return None
 
     def _flatten_orders(self, positions, prices):
         from mlbt.trading.oms import Order
