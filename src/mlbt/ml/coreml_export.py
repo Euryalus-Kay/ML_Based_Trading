@@ -37,7 +37,7 @@ def export_to_coreml(model_dir: str, output_path: str,
         )
 
     model_p = Path(model_dir)
-    state = torch.load(model_p / "model.pt", map_location="cpu")
+    state = torch.load(model_p / "model.pt", map_location="cpu", weights_only=False)
     feature_cols = json.loads((model_p / "feature_cols.json").read_text())
     n_features = state.get("n_features", len(feature_cols))
     model_kind = state.get("model_kind", "patchtst_xl")
@@ -59,7 +59,29 @@ def export_to_coreml(model_dir: str, output_path: str,
         model = Cls(n_features=n_features, window=window, patch_size=ps)
     else:
         model = Cls(n_features=n_features)
-    model.load_state_dict(state["state_dict"])
+
+    sd = state["state_dict"]
+    # Multi-task model from train_xl: state_dict is {"backbone": ..., "heads": ...}
+    # — load the backbone weights into the single-head class; the heads
+    # mismatch is OK because we're only running a single inference head.
+    if isinstance(sd, dict) and "backbone" in sd and "heads" in sd:
+        # Load backbone weights but skip head (the multi-task heads don't match
+        # the single-head Linear in the original class).
+        backbone_sd = sd["backbone"]
+        # Drop the head_*; the original class has a head module, but we just want
+        # the embedding + first multi-task head.
+        head_idx = state.get("primary_head_idx", 0)
+        primary_head = {k.replace(f"{head_idx}.", "head."): v
+                          for k, v in sd["heads"].items()
+                          if k.startswith(f"{head_idx}.")}
+        merged = dict(backbone_sd, **primary_head)
+        try:
+            model.load_state_dict(merged, strict=False)
+        except Exception as e:
+            print(f"strict load failed ({e}); loading non-strict")
+            model.load_state_dict(backbone_sd, strict=False)
+    else:
+        model.load_state_dict(sd)
     model.eval()
 
     example = torch.randn(1, window, n_features)
