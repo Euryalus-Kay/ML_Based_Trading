@@ -1,5 +1,56 @@
 # ML_Based_Trading
 
+## Live trading — one-page quickstart
+
+```bash
+# 1. Paper-trade against Alpaca (default; safe)
+export ALPACA_KEY=...          # from alpaca.markets paper sign-up
+export ALPACA_SECRET=...
+PYTHONPATH=src python -m mlbt.trading.runner \
+    --model-dir data/cand_xs8_v1 \
+    --bar 1h --top-k 10 --rebalance-every 8 \
+    --broker alpaca --paper
+
+# 2. One-shot signal (no orders, just print the top-10 right now)
+PYTHONPATH=src python -m mlbt.trading.runner --model-dir data/cand_xs8_v1 --once
+
+# 3. Replay any model through the LIVE stack on historical data
+PYTHONPATH=src python -m mlbt.trading.backtest_runner \
+    --model-dir data/cand_xs8_v1 --dataset data/dataset_1h_micro.parquet \
+    --top-k 10 --rebalance-every 8 --bps 5 --slippage 2
+```
+
+The live runner = the backtest runner with the broker swapped out — identical
+code paths for signal generation, OMS, risk management, and position
+tracking. Promoting to live money is one flag (`--live`) once you trust the
+paper P&L. State is persisted to `data/trading_state/` (positions, risk
+ledger, last cycle) so the process can crash-restart cleanly.
+
+### Architecture
+
+  `mlbt.trading.signal.LiveSignalGenerator` — load model + rebuild features
+    on the most-recent data → per-symbol score in <1 sec for the 42-cap
+    universe (GBM backend, CPU). Inference auto-selects CoreML → MPS → CPU.
+
+  `mlbt.trading.oms.OrderManagementSystem` — score table → top_k / bottom_k
+    target weights → orders against current positions (min_order_dollars
+    dust filter).
+
+  `mlbt.trading.positions.PositionTracker` — VWAP, realised/unrealised P&L,
+    JSON-persisted state.
+
+  `mlbt.trading.risk.RiskManager` — per-symbol cap (15 %), gross-exposure
+    cap (150 %), trailing-DD kill switch (default 15 %, configurable),
+    single-bar-loss kill switch (default −5 %).
+
+  `mlbt.trading.broker.BrokerAdapter` — `PaperBrokerAdapter` (in-process,
+    slippage-as-config) or `AlpacaBrokerAdapter` (paper or live via env).
+
+  `mlbt.trading.runner.TradingRunner` — main loop, market-hours check,
+    SIGINT/SIGTERM flatten, graceful crash-restart.
+
+---
+
 ## Production strategy
 
 **Strategy:** `xs8_LongOnlyTop10` — long the 10 cross-sectionally-best-ranked

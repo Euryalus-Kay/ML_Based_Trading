@@ -215,17 +215,28 @@ def train_xl_multitask(dataset_path: str, out_dir: str,
     feat_cols = [c for c in df.columns
                  if c not in drop and not c.startswith("y_")
                  and np.issubdtype(df[c].dtype, np.number)]
-    # Per-feature z-score normalisation (fit on whole dataset is fine for now;
-    # for production walk-forward, fit on the training fold only).
-    means = df[feat_cols].mean()
-    stds = df[feat_cols].std().replace(0, 1.0)
-    df_norm = df.copy()
+    # Fill all-NaN features with 0; keep partial-NaN features (the sequence
+    # dataset will skip windows that contain NaN, so we don't lose contiguous
+    # per-symbol sequences).
+    nan_share = df[feat_cols].isna().mean()
+    feat_cols = [c for c in feat_cols if nan_share.get(c, 1.0) < 0.95]
+    df_filled = df.copy()
+    # Forward-fill per symbol then back-fill, then 0
+    df_filled[feat_cols] = (df_filled.groupby("symbol")[feat_cols]
+                              .transform(lambda s: s.ffill().bfill().fillna(0)))
+    # Per-feature z-score normalisation
+    means = df_filled[feat_cols].mean()
+    stds = df_filled[feat_cols].std().replace(0, 1.0)
+    df_norm = df_filled.copy()
     df_norm[feat_cols] = (df_norm[feat_cols] - means) / stds
-    df_norm = df_norm.dropna(subset=feat_cols, how="any")
+    # Sort by index to keep contiguous time per-symbol AFTER groupby ffill above
+    df_norm = df_norm.sort_index()
 
     n = len(df_norm)
     tr_end = int(n * 0.7); va_end = int(n * 0.85)
     train_df = df_norm.iloc[:tr_end]; val_df = df_norm.iloc[tr_end:va_end]; test_df = df_norm.iloc[va_end:]
+    log.info("split sizes: train=%d val=%d test=%d (features=%d)",
+             len(train_df), len(val_df), len(test_df), len(feat_cols))
 
     train_ds = _seq_dataset(train_df, feat_cols, list(cfg.targets), cfg.window)
     val_ds = _seq_dataset(val_df, feat_cols, list(cfg.targets), cfg.window)
@@ -312,9 +323,13 @@ def train_xl_multitask(dataset_path: str, out_dir: str,
                 X = X.to(device)
                 logits = net(X)
                 t_y.append(Y.numpy()); t_p.append(torch.sigmoid(logits).cpu().numpy())
-        t_y = np.concatenate(t_y) if t_y else np.array([])
-        t_p = np.concatenate(t_p) if t_p else np.array([])
-        test_scores_all_seeds.append(t_p[:, primary_idx])
+        t_y = np.concatenate(t_y) if t_y else np.empty((0, len(cfg.targets)))
+        t_p = np.concatenate(t_p) if t_p else np.empty((0, len(cfg.targets)))
+        if t_p.ndim == 1:
+            t_p = t_p.reshape(-1, 1)
+        # Pick the primary target column (or 0 if single)
+        col_idx = primary_idx if t_p.shape[1] > primary_idx else 0
+        test_scores_all_seeds.append(t_p[:, col_idx] if len(t_p) else np.array([]))
         # Save individual seed checkpoint
         torch.save({
             "state_dict": best_state, "model_kind": cfg.model_kind,
