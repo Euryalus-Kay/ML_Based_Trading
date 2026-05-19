@@ -19,6 +19,8 @@ class TradingConfig:
     market_neutral: bool = False
     gross_leverage: float = 1.0
     max_position_pct: float = 0.15  # cap per name
+    sizing_mode: str = "equal"      # "equal" | "confidence" | "conf_vol"
+    vol_floor: float = 0.005         # min realised vol used when conf_vol-sizing
 
     # Execution
     entry_lag_bars: int = 1

@@ -41,6 +41,7 @@ def replay(model_dir: str, dataset_path: str, out_path: Optional[str] = None,
             min_universe_size: int = 6,
             entry_lag_bars: int = 1,
             rebalance_every_bars: int = 1,
+            sizing_mode: str = "equal",
             enable_kill_switch: bool = False,
             max_drawdown_kill: float = -0.30,
             start_equity: float = 100_000.0) -> dict:
@@ -58,6 +59,15 @@ def replay(model_dir: str, dataset_path: str, out_path: Optional[str] = None,
                     .pivot_table(index="ts", columns="symbol", values="close"))
     prices_df = prices_df.sort_index().ffill()
 
+    # Also build a vol_20 lookup so the OMS conf_vol sizing has data
+    vol_col = "vol_20" if "vol_20" in ds.columns else None
+    vol_df = None
+    if vol_col is not None:
+        vol_df = (ds.reset_index().rename(columns={"index": "ts"})
+                    [["ts", "symbol", vol_col]]
+                    .pivot_table(index="ts", columns="symbol", values=vol_col)
+                    .sort_index().ffill())
+
     # Merge predictions w/ next-bar realised return so we know mark-to-market P&L
     # at the next bar.
     cfg = TradingConfig(top_k=top_k, bottom_k=bottom_k,
@@ -66,6 +76,7 @@ def replay(model_dir: str, dataset_path: str, out_path: Optional[str] = None,
                           min_universe_size=min_universe_size,
                           bps_slippage_estimate=slippage_bps,
                           rebalance_every_bars=rebalance_every_bars,
+                          sizing_mode=sizing_mode,
                           enable_kill_switch=enable_kill_switch,
                           max_drawdown_kill=max_drawdown_kill,
                           poll_seconds=0)
@@ -114,8 +125,11 @@ def replay(model_dir: str, dataset_path: str, out_path: Optional[str] = None,
                                    "halted": True})
             continue
 
-        # Score frame for this bar
+        # Score frame for this bar (and vol_20 if available, for conf_vol sizing)
         scored = preds[preds["ts"] == ts][["symbol", "y_score"]].dropna()
+        if vol_df is not None and ts in vol_df.index:
+            vols_at_ts = vol_df.loc[ts]
+            scored = scored.assign(vol_20=scored["symbol"].map(vols_at_ts))
 
         # Rebalance gate: only refresh target weights AND submit orders every
         # `rebalance_every_bars`. Between rebalances we let positions drift —
@@ -203,6 +217,8 @@ def cli():
     p.add_argument("--bps", type=float, default=5.0)
     p.add_argument("--slippage", type=float, default=2.0)
     p.add_argument("--rebalance-every", type=int, default=1)
+    p.add_argument("--sizing", choices=["equal", "confidence", "conf_vol"],
+                    default="equal")
     p.add_argument("--kill-switch", action="store_true",
                     help="Enable trailing max-DD kill switch (default off in backtest)")
     p.add_argument("--max-dd-kill", type=float, default=-0.30)
@@ -213,6 +229,7 @@ def cli():
            market_neutral=args.market_neutral,
            bps_per_trade=args.bps, slippage_bps=args.slippage,
            rebalance_every_bars=args.rebalance_every,
+           sizing_mode=args.sizing,
            enable_kill_switch=args.kill_switch,
            max_drawdown_kill=args.max_dd_kill,
            start_equity=args.start_equity)

@@ -48,32 +48,60 @@ class OrderManagementSystem:
         self.cfg = cfg
 
     def scores_to_targets(self, scores: pd.DataFrame, ts: pd.Timestamp) -> TargetWeights:
-        """scores: DataFrame with 'symbol' and 'y_score' columns.
+        """scores: DataFrame with 'symbol', 'y_score', and (optionally) 'vol_20'.
 
-        Returns TargetWeights with portfolio-weighted positions on the
-        top-k (long) and bottom-k (short, if not long_only) symbols.
+        Three sizing modes (set via cfg.sizing_mode):
+          - "equal":      classic 1/K per leg (default)
+          - "confidence": weight ∝ (score − baseline), normalised so total
+                          gross stays at gross_leverage. Higher-conviction
+                          picks get bigger slices.
+          - "conf_vol":   weight ∝ (score − baseline) / max(vol_20, vol_floor).
+                          Confidence-weighted AND inversely scaled by
+                          realised vol — defensive against high-vol concentration.
         """
         scores = scores.dropna(subset=["y_score"]).sort_values("y_score", ascending=False)
         if len(scores) < self.cfg.min_universe_size:
             log.warning("universe too small: %d (min %d) — flat",
                           len(scores), self.cfg.min_universe_size)
             return TargetWeights(weights={s: 0.0 for s in scores["symbol"]}, ts=ts)
-        longs = scores.head(self.cfg.top_k)
-        shorts = scores.tail(self.cfg.bottom_k) if self.cfg.bottom_k > 0 else pd.DataFrame(columns=scores.columns)
+        longs = scores.head(self.cfg.top_k).copy()
+        shorts = scores.tail(self.cfg.bottom_k).copy() if self.cfg.bottom_k > 0 else pd.DataFrame(columns=scores.columns)
 
-        if self.cfg.market_neutral and self.cfg.bottom_k > 0:
-            long_w = self.cfg.gross_leverage / 2 / max(1, len(longs))
-            short_w = -self.cfg.gross_leverage / 2 / max(1, len(shorts))
-        else:
-            long_w = self.cfg.gross_leverage / max(1, len(longs))
-            short_w = 0.0 if self.cfg.bottom_k == 0 else \
-                      -self.cfg.gross_leverage / max(1, len(shorts))
+        mode = getattr(self.cfg, "sizing_mode", "equal")
+        is_market_neutral = self.cfg.market_neutral and self.cfg.bottom_k > 0
+        gross_each_leg = (self.cfg.gross_leverage / 2 if is_market_neutral
+                          else self.cfg.gross_leverage)
+
+        def _alloc_leg(group: pd.DataFrame, gross: float, sign: float) -> dict:
+            n = max(1, len(group))
+            if mode == "equal":
+                per = gross / n * sign
+                return {s: per for s in group["symbol"]}
+            # Confidence: distance from neutral score. Use |score − 0.5| so
+            # both longs (score > 0.5) and shorts (score < 0.5) get rewarded
+            # for being far from neutral.
+            conf = (group["y_score"] - 0.5).abs().clip(lower=1e-4)
+            if mode == "conf_vol" and "vol_20" in group.columns:
+                vol = group["vol_20"].fillna(group["vol_20"].median())
+                vol = vol.clip(lower=getattr(self.cfg, "vol_floor", 0.005))
+                raw = (conf / vol).values
+            else:
+                raw = conf.values
+            tot = float(raw.sum()) or 1.0
+            w_each = (raw / tot) * gross * sign
+            return {s: float(w) for s, w in zip(group["symbol"].values, w_each)}
 
         weights: Dict[str, float] = {s: 0.0 for s in scores["symbol"]}
-        for s in longs["symbol"]:
-            weights[s] = min(long_w, self.cfg.max_position_pct)
-        for s in shorts["symbol"]:
-            weights[s] = max(short_w, -self.cfg.max_position_pct)
+        # Long leg
+        if self.cfg.top_k > 0:
+            for s, w in _alloc_leg(longs, gross_each_leg, +1).items():
+                weights[s] = max(min(w, self.cfg.max_position_pct),
+                                  -self.cfg.max_position_pct)
+        # Short leg
+        if self.cfg.bottom_k > 0:
+            for s, w in _alloc_leg(shorts, gross_each_leg, -1).items():
+                weights[s] = max(min(w, self.cfg.max_position_pct),
+                                  -self.cfg.max_position_pct)
         return TargetWeights(weights=weights, ts=ts)
 
     def targets_to_orders(self,
