@@ -56,6 +56,9 @@ class XLTrainConfig:
     n_seeds: int = 3                       # average across seeds for stability
     device: str = "auto"
     use_bf16: bool = True                  # bf16 weights on MPS where supported
+    max_features: int = 128                # cap feature count (top-N by variance)
+                                            # — sequence model with 1000s of features
+                                            # is OOM-prone on Apple MPS
 
 
 # ----- multi-task wrapper ---------------------------------------------------
@@ -220,6 +223,14 @@ def train_xl_multitask(dataset_path: str, out_dir: str,
     # per-symbol sequences).
     nan_share = df[feat_cols].isna().mean()
     feat_cols = [c for c in feat_cols if nan_share.get(c, 1.0) < 0.95]
+    # Cap feature count by selecting top-K by variance (richer sequence models
+    # struggle with 1000s of features on MPS; LightGBM doesn't.)
+    if cfg.max_features and len(feat_cols) > cfg.max_features:
+        # Use a sample for variance computation (faster)
+        sample = df[feat_cols].sample(min(100_000, len(df)), random_state=0)
+        variances = sample.var(numeric_only=True).fillna(0)
+        feat_cols = list(variances.nlargest(cfg.max_features).index)
+        log.info("feature selection: kept top-%d by variance", len(feat_cols))
     df_filled = df.copy()
     # Forward-fill per symbol then back-fill, then 0
     df_filled[feat_cols] = (df_filled.groupby("symbol")[feat_cols]
@@ -401,11 +412,12 @@ if __name__ == "__main__":
     p.add_argument("--batch", type=int, default=384)
     p.add_argument("--seeds", type=int, default=3)
     p.add_argument("--primary", default="y_xsec_top_8")
+    p.add_argument("--max-features", type=int, default=128)
     args = p.parse_args()
     cfg = XLTrainConfig(
         primary_target=args.primary, model_kind=args.model,
         window=args.window, epochs=args.epochs, batch_size=args.batch,
-        n_seeds=args.seeds,
+        n_seeds=args.seeds, max_features=args.max_features,
     )
     print(json.dumps(train_xl_multitask(args.dataset, args.out, cfg),
                       indent=2, default=str))
