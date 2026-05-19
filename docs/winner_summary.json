@@ -1,0 +1,36 @@
+{
+  "model_dir": "data/cand_xs8_v1",
+  "dataset_path": "data/dataset_1h_micro.parquet",
+  "target": "y_xsec_top_8",
+  "top_k": 10,
+  "bottom_k": 0,
+  "market_neutral": false,
+  "paper_metrics": {
+    "n_bars": 2830,
+    "total_return": 0.2416403517516008,
+    "ann_return": 0.1266325226000257,
+    "ann_vol": 0.052091338717655415,
+    "sharpe": 2.4309707854965508,
+    "max_drawdown": -0.10451370399367632,
+    "hit_rate": 0.5123674911660777
+  },
+  "retail_metrics": {
+    "n_bars": 2830,
+    "total_return": 0.1618533205031203,
+    "ann_return": 0.08818872047988432,
+    "ann_vol": 0.05210467161503786,
+    "sharpe": 1.6925300121156945,
+    "max_drawdown": -0.10866176143605255,
+    "hit_rate": 0.5056537102473498
+  },
+  "spy_metrics": {
+    "n_bars": 2830,
+    "total_return": 0.30792917760476013,
+    "ann_return": 0.16821373720138658,
+    "ann_vol": 0.1602910007146724,
+    "sharpe": 1.049427207088295,
+    "max_drawdown": -0.19433840940536862,
+    "hit_rate": 0.5303886925795053
+  },
+  "trade_count_paper": 2830
+}

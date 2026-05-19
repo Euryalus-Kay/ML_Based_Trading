@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlbt"
+version = "0.1.0"
+description = "Multi-source, time-aligned market data collector for short-horizon ML"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "ML_Based_Trading"}]
+license = {text = "MIT"}
+dependencies = [
+    "pandas>=2.1",
+    "numpy>=1.26",
+    "pyarrow>=15",
+    "duckdb>=0.10",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+    "requests-cache>=1.1",
+    "tenacity>=8.2",
+    "yfinance>=0.2.40",
+    "exchange-calendars>=4.5",
+    "feedparser>=6.0",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "click>=8.1",
+    "loguru>=0.7",
+    "tqdm>=4.66",
+    "pytrends>=4.9",
+]
+
+[project.optional-dependencies]
+keys = ["alpha-vantage", "twelvedata", "finnhub-python", "polygon-api-client", "alpaca-py", "praw"]
+dev = ["pytest>=8.0", "pytest-mock>=3.12"]
+
+[project.scripts]
+mlbt = "mlbt.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mlbt = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

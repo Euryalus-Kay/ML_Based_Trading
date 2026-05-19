@@ -1,0 +1,141 @@
+# Default trading universe + cross-asset/macro symbols to track.
+# Override at runtime with --universe my_universe.yaml.
+
+equities:
+  mega_caps:   [AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AVGO, ORCL, JPM]
+  banks:       [JPM, BAC, GS, MS, C, WFC]
+  semis:       [NVDA, AMD, INTC, AVGO, TSM, ASML, MU, AMAT, LRCX, KLAC]
+  energy:      [XOM, CVX, COP, SLB, EOG, OXY]
+  consumer:    [WMT, COST, HD, NKE, MCD, SBUX, TGT]
+  health:      [UNH, JNJ, LLY, PFE, ABBV, MRK]
+  small_high_beta: [PLTR, RIVN, SOFI, COIN, MARA, RIOT, AFRM]
+
+indices:
+  - ^GSPC      # S&P 500
+  - ^NDX       # Nasdaq 100
+  - ^DJI       # Dow
+  - ^RUT       # Russell 2000
+  - ^VIX       # Volatility
+  - ^VVIX      # Vol of vol
+  - ^MOVE      # Treasury vol
+  - ^OVX       # Oil vol
+  - ^TNX       # 10y yield
+  - ^FVX       # 5y yield
+  - ^IRX       # 13w T-bill
+  # ^DXY is unreliable on Yahoo — we use the UUP ETF (in sector_etfs) instead.
+
+sector_etfs:
+  - SPY        # S&P 500 — primary benchmark to beat
+  - XLF        # Financials
+  - XLK        # Tech
+  - XLE        # Energy
+  - XLV        # Health
+  - XLY        # Consumer Discretionary
+  - XLP        # Consumer Staples
+  - XLI        # Industrials
+  - XLU        # Utilities
+  - XLB        # Materials
+  - XLRE       # Real Estate
+  - XLC        # Communications
+  - SMH        # Semiconductors
+  - KRE        # Regional banks
+  - ARKK       # Innovation / risk-on
+  - HYG        # High yield credit
+  - LQD        # Investment grade
+  - TLT        # 20y Treasury
+  - IEF        # 7-10y Treasury
+  - GLD        # Gold
+  - SLV        # Silver
+  - USO        # Oil
+  - UNG        # Nat gas
+  - UUP        # Dollar
+  - FXE        # Euro
+  - FXY        # Yen
+  - EEM        # Emerging mkts
+  - FXI        # China
+  - EWJ        # Japan
+  - EWZ        # Brazil
+
+futures:
+  - ES=F       # S&P 500 e-mini
+  - NQ=F       # Nasdaq 100 e-mini
+  - YM=F       # Dow e-mini
+  - RTY=F      # Russell 2000 e-mini
+  - CL=F       # Crude oil
+  - NG=F       # Nat gas
+  - GC=F       # Gold
+  - SI=F       # Silver
+  - HG=F       # Copper
+  - ZB=F       # 30y bond
+  - ZN=F       # 10y note
+  - ZC=F       # Corn
+  - ZW=F       # Wheat
+  - ZS=F       # Soybeans
+
+fx:
+  - EURUSD=X
+  - GBPUSD=X
+  - USDJPY=X
+  - USDCNY=X
+  - USDCAD=X
+  - AUDUSD=X
+  - USDCHF=X
+  # DX=F (Dollar index futures) — flaky on Yahoo, use UUP ETF instead
+
+crypto_binance:
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
+  - BNBUSDT
+
+# FRED series — anonymous CSV endpoint
+# Picked for: yield curve, credit, inflation expectations, financial conditions,
+# liquidity, dollar, gold/oil, breakevens.
+fred_series:
+  - DGS10               # 10y treasury constant maturity
+  - DGS2                # 2y
+  - DGS3MO              # 3m T-bill
+  - T10Y2Y              # 10y - 2y spread (recession signal)
+  - T10Y3M              # 10y - 3m
+  - BAMLH0A0HYM2        # ICE BofA US High Yield OAS
+  - BAMLC0A0CM          # ICE BofA US Corporate OAS
+  - T5YIE               # 5y breakeven inflation
+  - T10YIE              # 10y breakeven
+  - DFII10              # 10y TIPS
+  - DEXUSEU             # USD/EUR
+  - DEXJPUS             # JPY/USD
+  - DCOILWTICO          # WTI crude
+  - DCOILBRENTEU        # Brent
+  - GOLDPMGBD228NLBM    # Gold PM London
+  - VIXCLS              # VIX close
+  - NFCI                # Chicago Fed financial conditions
+  - WALCL               # Fed balance sheet
+  - WTREGEN             # Treasury General Account
+  - RRPONTSYD           # Reverse repo
+  - SOFR                # Secured Overnight Financing Rate
+  - DFF                 # Fed funds effective
+  - UNRATE              # Unemployment
+  - CPIAUCSL            # CPI
+  - PCEPI               # PCE price index
+
+# Wikipedia pages whose pageview series are useful proxies for attention.
+wikipedia_pages:
+  - Tesla,_Inc.
+  - Apple_Inc.
+  - NVIDIA
+  - Recession
+  - Inflation
+  - Federal_Reserve
+
+# Google Trends keywords (kept small — pytrends rate-limits aggressively).
+gtrends_keywords:
+  - "buy stocks"
+  - "stock market crash"
+  - "recession"
+  - "bitcoin"
+
+bar: "5min"          # 1min | 5min | 15min | 1h | 1d
+session: "rth"       # rth | full  (rth = regular trading hours, NYSE 09:30-16:00 ET)
+timezone: "UTC"
+default_start: "2022-01-01"
+default_end: "today"

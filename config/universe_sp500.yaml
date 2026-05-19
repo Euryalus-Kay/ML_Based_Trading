@@ -1,0 +1,129 @@
+# Expanded universe: full S&P 500 + cross-asset signals.
+# Generated from config/sp500_tickers.txt via Wikipedia scrape.
+
+equities:
+  # Populated dynamically from sp500_tickers.txt — see _equity_symbols() in
+  # pipeline/collect.py. We keep one named slice here so the YAML loader
+  # has the right shape; the actual list is loaded from the txt file.
+  sp500_full: []
+
+indices:
+  - ^GSPC
+  - ^NDX
+  - ^DJI
+  - ^RUT
+  - ^VIX
+  - ^VVIX
+  - ^MOVE
+  - ^OVX
+  - ^TNX
+  - ^FVX
+  - ^IRX
+
+sector_etfs:
+  - SPY
+  - XLF
+  - XLK
+  - XLE
+  - XLV
+  - XLY
+  - XLP
+  - XLI
+  - XLU
+  - XLB
+  - XLRE
+  - XLC
+  - SMH
+  - KRE
+  - ARKK
+  - HYG
+  - LQD
+  - TLT
+  - IEF
+  - GLD
+  - SLV
+  - USO
+  - UNG
+  - UUP
+  - FXE
+  - FXY
+  - EEM
+  - FXI
+  - EWJ
+  - EWZ
+
+futures:
+  - ES=F
+  - NQ=F
+  - YM=F
+  - RTY=F
+  - CL=F
+  - NG=F
+  - GC=F
+  - SI=F
+  - HG=F
+  - ZB=F
+  - ZN=F
+  - ZC=F
+  - ZW=F
+  - ZS=F
+
+fx:
+  - EURUSD=X
+  - GBPUSD=X
+  - USDJPY=X
+  - USDCNY=X
+  - USDCAD=X
+  - AUDUSD=X
+  - USDCHF=X
+
+crypto_binance:
+  - BTCUSDT
+  - ETHUSDT
+
+fred_series:
+  - DGS10
+  - DGS2
+  - DGS3MO
+  - T10Y2Y
+  - T10Y3M
+  - BAMLH0A0HYM2
+  - BAMLC0A0CM
+  - T5YIE
+  - T10YIE
+  - DFII10
+  - DEXUSEU
+  - DEXJPUS
+  - DCOILWTICO
+  - VIXCLS
+  - NFCI
+  - WALCL
+  - WTREGEN
+  - RRPONTSYD
+  - SOFR
+  - DFF
+  - UNRATE
+  - CPIAUCSL
+
+wikipedia_pages:
+  - Tesla,_Inc.
+  - Apple_Inc.
+  - NVIDIA
+  - Recession
+  - Inflation
+  - Federal_Reserve
+
+gtrends_keywords:
+  - "buy stocks"
+  - "stock market crash"
+  - "recession"
+
+bar: "1h"
+session: "rth"
+timezone: "UTC"
+default_start: "2024-05-20"
+default_end: "today"
+
+# When this file is loaded, the collector auto-reads sp500_tickers.txt
+# and merges those into equities.sp500_full.
+sp500_tickers_file: "config/sp500_tickers.txt"
