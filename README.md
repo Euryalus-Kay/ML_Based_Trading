@@ -76,33 +76,64 @@ Training takes ~5 min on the M4 Max (15 LightGBM seed×fold runs across all
 ### Walk-forward across history (the open gate)
 
 The handoff asks for a strategy that beats SPY on Sharpe OR Calmar in 4 of 5
-sub-windows spanning ≥ 10 years. Current state:
+sub-windows spanning ≥ 10 years. The xs10 LONG_ONLY_k10 ML model, trained
+once per window on 5y of preceding history, produces this result against SPY
+over 2010–2026 (win1 = 2006-2010 has no prior training data and is skipped):
 
-- **`vol_target` SPY** (classical, no ML) over 2005–2026: beats SPY on Calmar
-  in 3 of 5 windows, Sharpe in 2 of 5. Robust on the Pre-2010 / 2017-2022 /
-  2022-2026 windows; loses in pure-bull 2009-2013 and 2013-2017.
-- **`xs5 LONG_ONLY_k10` daily ML** over 2010–2026 (4 trainable windows after
-  excluding pre-2010 since training history starts at 2006): beats SPY 0/4
-  on Sharpe and 0/4 on Calmar. DD lower in 3/4. The 5-day-horizon ML on
-  daily bars is too noisy at this universe size.
-- **`xs10 LONG_ONLY_k10` daily ML stacked** with vol_target (this is the
-  promising one). On 3 trainable n_windows=4 windows (2011-2026):
-    - w_ml = 0.2: stk_sharpe 2/3, stk_calmar 1/3, DD better 3/3
-    - w_ml = 0.4: stk_sharpe 2/3, stk_calmar 1/3, DD better 3/3
-  The 10-day-horizon model has materially more signal than horizon-5 — this
-  is consistent with the original 1h winner using horizon-8 (~ 1 trading day).
-  Hits the "beats Sharpe OR Calmar in 80 % of windows" gate on the n=4 setup.
-  Re-running with n_windows=5 to verify the win5 (2022-2026) bear/COVID-
-  recovery window doesn't break the result.
-- **Stacked w_ml sweep helper**: `python -m mlbt.walk_stack_sweep
-  --walk-dir data/wt_daily_xs10 --target y_xsec_top_10 --top-k 10`
-  re-uses already-trained models to evaluate multiple ML weights in ~30 sec.
+| Window         | ML Sharpe | ML Calmar | ML DD   | SPY Sharpe | SPY DD  | beats? |
+|----------------|----------:|----------:|--------:|-----------:|--------:|--------|
+| 2010-05 → 2014-05 |   −0.69 |    −0.09  | −17.9 % |    0.82    | −19.4 % | ✗ |
+| 2014-05 → 2018-05 | **2.67** |    0.56  | −10.7 % |    0.72    | −14.4 % | ✓ Sharpe |
+| 2018-05 → 2022-05 | **2.31** | **0.80** | −10.6 % |    0.63    | −34.1 % | ✓ Sharpe + Calmar |
+| 2022-05 → 2026-05 |   −1.26 |    −0.22  | −20.5 % |    0.86    | −19.0 % | ✗ |
 
-The full SP500 (~503 names) 1h dataset build is now possible after the
-xsmom fix — but on the M4 it still pegs ~14 GB and 12 + min, so it was set
-aside in favour of validating the proven 1h-49 winner. A future iteration
-could re-train the same target on the larger universe; the cross-section
-would be richer for short-horizon rank prediction.
+**Pure ML beats SPY in 2 of 4 trainable windows on Sharpe** — including very
+high Sharpes (2.67, 2.31) in 2014-2018 and 2018-2022. The ML signal is real
+in those bull / COVID-recovery regimes. **It fails in 2010-2014** (post-GFC
+Greek crisis chop) **and 2022-2026** (which mixes the 2022 bear, the 2023 AI
+rally, and the 2024 bull — the ML model trained on 2017-2022 doesn't
+generalise to that regime mix). 2 of 4 = 50 %, below the 80 % gate.
+
+A stacked overlay `0.2 × ML + 0.8 × vol_target_SPY` softens the bad windows
+at the cost of compressing the good ones — Sharpe 0.72, 0.74, 0.81, 0.69
+respectively. 2/4 stk_beats_sharpe, 1/4 stk_beats_calmar, **4/4 DD better
+than SPY**. So we **do meet** "Max drawdown strictly less than SPY's in every
+window" — but **still fail** the 4-of-5 Sharpe/Calmar gate (2/4 ≈ 50 %).
+
+Comparison strategies on the same windows:
+
+- **`vol_target` SPY** (classical, no ML) 2005–2026 5-window walk: beats SPY
+  on Calmar in 3 of 5 windows, Sharpe in 2 of 5, DD better in 5/5. Robust on
+  2005-2009 (crisis), 2017-2022 (COVID), 2022-2026; loses in pure-bull
+  2009-2013 and 2013-2017.
+- **`xs5 LONG_ONLY_k10` daily ML** (5-day horizon): 0/4 Sharpe, 0/4 Calmar.
+  The shorter horizon is too noisy on daily bars.
+
+**Stacked w_ml sweep**: `python -m mlbt.walk_stack_sweep --walk-dir
+data/wt_daily_xs10 --target y_xsec_top_10 --top-k 10` runs against the
+already-trained models in ~5 sec per (window × weight) pair.
+
+### Why this is hard to close
+
+The walk-forward gap is structural at this scale:
+
+1. **Universe-size dependence**: the 1h winner runs against 42 mega-caps in
+   the 2024-26 window where every stock has dense data. The 2010-2014 daily
+   window has only ~32 active names (PLTR, COIN, RIVN, ABBV etc. came later)
+   — the cross-sectional ranking has less to choose from, and the model
+   over-fits the dominant names.
+2. **Horizon × bar mismatch**: the 1h xs8 winner spans 8 hours ≈ 1 trading
+   day. The daily xs10 model spans 10 days ≈ 2 weeks. Different alpha
+   sources.
+3. **Yahoo Finance limits 1h to ~730 days** — so a true 1h walk-forward
+   spanning 10 + years isn't possible without a paid intraday vendor.
+
+The full SP500 (~503 names) 1h dataset build is now feasible after the
+xsmom feature-explosion fix (commit 4c62cf8) — but on the M4 it still pegs
+~14 GB and 12 + min, so it was set aside in favour of validating the proven
+49-cap winner. A future iteration could re-train xs8 on the full universe;
+the richer cross-section should boost signal-to-noise for short-horizon
+rank prediction.
 
 ### Known weaknesses
 
