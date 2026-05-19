@@ -1,0 +1,131 @@
+bar: 1h
+equities:
+  top100_liquid:
+  - NVDA
+  - TSLA
+  - AAPL
+  - MSFT
+  - AMZN
+  - META
+  - AMD
+  - PLTR
+  - GOOGL
+  - MU
+  - AVGO
+  - SNDK
+  - GOOG
+  - ORCL
+  - UNH
+  - INTC
+  - LLY
+  - COIN
+  - HOOD
+  - JPM
+  - APP
+  - CRM
+  - BRK-B
+  - V
+  - XOM
+  - SMCI
+  - BA
+  - COST
+  - BAC
+  - UBER
+  - WMT
+  - CRWD
+  - GEV
+  - GS
+  - QCOM
+  - ADBE
+  - MA
+  - CVX
+  - TMO
+  - AMAT
+  - JNJ
+  - HD
+  - DELL
+  - GE
+  - WFC
+  - CAT
+  - PFE
+  - VRT
+  - C
+  - NFLX
+  - PG
+  - NKE
+  - IBM
+  - TXN
+  - MRK
+  - CSCO
+  - INTU
+  - ABBV
+  - ACN
+  - DIS
+  - LITE
+  - LRCX
+  - KO
+  - PGR
+  - MCD
+  - PANW
+  - VST
+  - STX
+  - F
+  - T
+  - VZ
+  - RCL
+  - WDC
+  - ETN
+  - PEP
+  - CEG
+  - TMUS
+  - SBUX
+  - ANET
+  - KLAC
+  - PYPL
+  - MS
+  - ISRG
+  - AMCR
+  - AXP
+  - APO
+  - DHR
+  - APH
+  - ABT
+  - SNPS
+  - NEE
+  - BSX
+  - PM
+  - SCHW
+  - FCX
+  - DASH
+  - COF
+  - LIN
+  - ADI
+  - TGT
+fred_series:
+- DGS10
+- DGS2
+- DGS3MO
+- T10Y2Y
+- VIXCLS
+- NFCI
+- SOFR
+- DFF
+- UNRATE
+- CPIAUCSL
+indices:
+- ^GSPC
+- ^NDX
+- ^VIX
+- ^TNX
+sector_etfs:
+- SPY
+- XLF
+- XLK
+- XLE
+- XLV
+- HYG
+- LQD
+- TLT
+- GLD
+- UUP
+session: rth
