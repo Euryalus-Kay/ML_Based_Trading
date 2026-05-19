@@ -86,10 +86,17 @@ class TradingRunner:
             targets.weights = self.risk.trim_to_caps(targets.weights)
 
         # 4. Translate to orders
-        prices = {s: self.broker.get_last_price(s) or 0.0 for s in targets.weights}
-        if isinstance(self.broker, PaperBrokerAdapter):
-            # Paper broker uses last prices we feed it from the scoring step
-            self.broker.update_prices(prices)
+        # Pull prices from the scored frame (signal builds them along with scores)
+        # so the paper broker can size orders without an external quote feed.
+        signal_prices = {}
+        if "close" in scores.columns:
+            signal_prices = {row.symbol: float(row.close)
+                              for row in scores.itertuples()
+                              if pd.notna(row.close) and row.close > 0}
+        if isinstance(self.broker, PaperBrokerAdapter) and signal_prices:
+            self.broker.update_prices(signal_prices)
+        prices = {s: self.broker.get_last_price(s) or signal_prices.get(s) or 0.0
+                  for s in targets.weights}
         equity = self.broker.get_equity() or self.tracker.total_equity(prices)
         current_positions = self.broker.get_positions()
         orders = self.oms.targets_to_orders(targets, current_positions,

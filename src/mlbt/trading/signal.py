@@ -149,11 +149,15 @@ class LiveSignalGenerator:
         t1 = time.monotonic()
         log.info("live inference: %d symbols in %.2f ms (backend=%s)",
                   len(latest), (t1 - t0) * 1000, self._backend)
+        # Include the last-known close price for each symbol so the paper
+        # broker / OMS can size orders without a separate quote feed.
+        prices = latest["close"].values if "close" in latest.columns else [None] * len(latest)
         out = pd.DataFrame({
             "symbol": latest["symbol"].values,
             "ts": latest["ts"].values,
             "y_score": scores,
             "edge": scores - 0.5,
+            "close": prices,
         })
         return out.sort_values("y_score", ascending=False)
 
